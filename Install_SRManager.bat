@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 chcp 65001 >nul 2>&1
 title Slavonska Ravnica - Installer
 
-set "INSTALL_DIR=%LOCALAPPDATA%\SRManager"
+set "DEFAULT_DIR=%LOCALAPPDATA%\SRManager"
 set "REPO=7oncha/SRManager-Installer"
 set "EXE_NAME=SRManager.exe"
 set "ICO_NAME=sr_logo.ico"
@@ -14,7 +14,23 @@ echo  ║     Slavonska Ravnica - SR Manager           ║
 echo  ║     Installer v1.0                           ║
 echo  ╚══════════════════════════════════════════════╝
 echo.
-echo  Install folder: %INSTALL_DIR%
+
+:: ── Ask install location ──
+echo  Zadani folder: %DEFAULT_DIR%
+echo.
+set /p "CUSTOM_DIR=  Unesi folder za instalaciju (ili ENTER za zadani): "
+
+if "%CUSTOM_DIR%"=="" (
+    set "INSTALL_DIR=%DEFAULT_DIR%"
+) else (
+    set "INSTALL_DIR=%CUSTOM_DIR%"
+)
+
+:: Remove trailing backslash if present
+if "%INSTALL_DIR:~-1%"=="\" set "INSTALL_DIR=%INSTALL_DIR:~0,-1%"
+
+echo.
+echo  Instalacija u: %INSTALL_DIR%
 echo.
 
 :: Create install directory
@@ -55,20 +71,32 @@ echo  [3/4] Skidam ikonu...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest 'https://raw.githubusercontent.com/%REPO%/main/sr_logo.ico' -OutFile '%INSTALL_DIR%\%ICO_NAME%'; Write-Host '  OK' } catch { Write-Host '  Ikona preskocena' }"
 
-:: Create desktop shortcut
-echo  [4/4] Kreiram shortcut...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath('Desktop'), 'SR Manager.lnk')); $sc.TargetPath = '%INSTALL_DIR%\%EXE_NAME%'; $sc.WorkingDirectory = '%INSTALL_DIR%'; $ico = '%INSTALL_DIR%\%ICO_NAME%'; if(Test-Path $ico) { $sc.IconLocation = $ico }; $sc.Description = 'Slavonska Ravnica Launcher'; $sc.Save(); Write-Host '  OK'"
+:: ── Ask about desktop shortcut ──
+echo  [4/4] Desktop shortcut
+echo.
+set /p "MAKE_SHORTCUT=  Zelis li kreirati Desktop ikonu? (D/N): "
+
+if /i "%MAKE_SHORTCUT%"=="D" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath('Desktop'), 'SR Manager.lnk')); $sc.TargetPath = '%INSTALL_DIR%\%EXE_NAME%'; $sc.WorkingDirectory = '%INSTALL_DIR%'; $ico = '%INSTALL_DIR%\%ICO_NAME%'; if(Test-Path $ico) { $sc.IconLocation = $ico }; $sc.Description = 'Slavonska Ravnica Launcher'; $sc.Save(); Write-Host '  Shortcut kreiran!'"
+) else (
+    echo   Shortcut preskocen.
+)
 
 echo.
 echo  ╔══════════════════════════════════════════════╗
 echo  ║  Instalacija zavrsena!                       ║
 echo  ║                                              ║
-echo  ║  SR Manager se nalazi na Desktopu.           ║
+echo  ║  Lokacija: %INSTALL_DIR%
 echo  ║  Buduce azuriranje je automatsko.            ║
 echo  ╚══════════════════════════════════════════════╝
 echo.
-echo  Pokrecem SR Manager...
-start "" "%INSTALL_DIR%\%EXE_NAME%"
-timeout /t 5
+
+set /p "RUN_NOW=  Zelis li pokrenuti SR Manager? (D/N): "
+if /i "%RUN_NOW%"=="D" (
+    start "" "%INSTALL_DIR%\%EXE_NAME%"
+)
+echo.
+echo  Gotovo!
+timeout /t 3
 exit
