@@ -48,9 +48,35 @@ $script:Files = @(
             <!-- Install path -->
             <StackPanel x:Name="panelPath" Grid.Row="2" Margin="0,0,0,16">
                 <TextBlock Text="Folder:" Foreground="#888" FontSize="11" FontFamily="Segoe UI" Margin="0,0,0,4"/>
-                <Border Background="#1a1a1a" CornerRadius="6" Padding="12,8">
-                    <TextBlock x:Name="txtPath" Foreground="#ccc" FontSize="12" FontFamily="Segoe UI Semibold"/>
-                </Border>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Background="#1a1a1a" CornerRadius="6" Padding="12,8">
+                        <TextBlock x:Name="txtPath" Foreground="#ccc" FontSize="12" FontFamily="Segoe UI Semibold" TextTrimming="CharacterEllipsis"/>
+                    </Border>
+                    <Button x:Name="btnBrowse" Grid.Column="1" Content="..." Margin="6,0,0,0" Padding="14,6" Cursor="Hand"
+                            FontFamily="Segoe UI" FontWeight="SemiBold" FontSize="13"
+                            Background="#1a1a1a" Foreground="#F5C518" BorderThickness="1" BorderBrush="#333"
+                            ToolTip="Promijeni folder">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="bbd" Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                        CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bbd" Property="Background" Value="#2a2a2a"/>
+                                        <Setter TargetName="bbd" Property="BorderBrush" Value="#F5C518"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </Grid>
             </StackPanel>
 
             <!-- Progress area -->
@@ -137,6 +163,7 @@ $window = [Windows.Markup.XamlReader]::Load($reader)
 $btnClose     = $window.FindName('btnClose')
 $btnInstall   = $window.FindName('btnInstall')
 $btnCancel    = $window.FindName('btnCancel')
+$btnBrowse    = $window.FindName('btnBrowse')
 $txtPath      = $window.FindName('txtPath')
 $txtDesc      = $window.FindName('txtDesc')
 $panelPath    = $window.FindName('panelPath')
@@ -156,6 +183,29 @@ $window.Add_MouseLeftButtonDown({ $window.DragMove() })
 
 $btnClose.Add_Click({ $window.Close() })
 $btnCancel.Add_Click({ $window.Close() })
+
+$btnBrowse.Add_Click({
+    Add-Type -AssemblyName System.Windows.Forms
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dlg.Description = "Odaberi folder za instalaciju SR Manager-a"
+    $dlg.ShowNewFolderButton = $true
+    if (Test-Path $script:InstallDir) {
+        $dlg.SelectedPath = $script:InstallDir
+    } elseif (Test-Path (Split-Path $script:InstallDir -Parent)) {
+        $dlg.SelectedPath = (Split-Path $script:InstallDir -Parent)
+    }
+    $result = $dlg.ShowDialog()
+    if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $dlg.SelectedPath) {
+        # Append "SR Manager" if user picked a generic parent folder
+        $picked = $dlg.SelectedPath
+        $leaf = Split-Path $picked -Leaf
+        if ($leaf -ne "SR Manager") {
+            $picked = Join-Path $picked "SR Manager"
+        }
+        $script:InstallDir = $picked
+        $txtPath.Text = $script:InstallDir
+    }
+})
 
 function Set-Progress {
     param([string]$Step, [int]$Pct)
