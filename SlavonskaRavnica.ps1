@@ -34,7 +34,7 @@ try {
 # ============================================================
 # CONSTANTS
 # ============================================================
-$script:AppVersion = "2.1.0.1"
+$script:AppVersion = "2.1.0.2"
 $script:ConfigPath = Join-Path $PSScriptRoot "sr_config.json"
 $script:IsAdmin = $false
 $script:GitHubRepo = ""
@@ -702,26 +702,33 @@ function Show-SRConfirm {
 }
 
 # ============================================================
-# GITHUB AUTO-UPDATE
+# AUTO-UPDATE (raw fetch iz javnog SRManager-Installer repoa)
 # ============================================================
+$script:UpdateRawUrl = "https://raw.githubusercontent.com/7oncha/SRManager-Installer/master/SlavonskaRavnica.ps1"
+
 function Check-ForUpdate {
-    if (-not $script:GitHubRepo) {
-        Write-Log "Auto-update: GitHub repo nije postavljen."
-        return $false
-    }
     try {
-        $url = "https://api.github.com/repos/$($script:GitHubRepo)/releases/latest"
-        Write-Log "Provjeravam update: $url"
-        $headers = @{ "User-Agent" = "SlavonskaRavnica-Launcher" }
-        $release = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 10
-        $remoteVersion = $release.tag_name -replace '^v',''
-        Write-Log "GitHub verzija: v$remoteVersion | Lokalna: v$($script:AppVersion)"
+        $url = "$($script:UpdateRawUrl)?nocache=$([DateTime]::UtcNow.Ticks)"
+        Write-Log "Provjeravam update: $($script:UpdateRawUrl)"
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add("User-Agent", "SlavonskaRavnica-Launcher")
+        $wc.Headers.Add("Cache-Control", "no-cache")
+        $content = $wc.DownloadString($url)
+        $wc.Dispose()
+
+        $m = [regex]::Match($content, '\$script:AppVersion\s*=\s*"([^"]+)"')
+        if (-not $m.Success) {
+            Write-Log "Auto-update: ne mogu izvuci remote AppVersion"
+            return $false
+        }
+        $remoteVersion = $m.Groups[1].Value
+        Write-Log "Remote verzija: v$remoteVersion | Lokalna: v$($script:AppVersion)"
         if ($remoteVersion -and $remoteVersion -ne $script:AppVersion) {
             $script:LatestVersion = @{
                 version = $remoteVersion
-                url     = $release.html_url
-                notes   = $release.body
-                assets  = $release.assets
+                url     = "https://github.com/7oncha/SRManager-Installer/releases/latest"
+                notes   = ""
+                content = $content
             }
             return $true
         } else {
@@ -735,33 +742,22 @@ function Check-ForUpdate {
 
 function Download-Update {
     if (-not $script:LatestVersion) { return }
-    $asset = $script:LatestVersion.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
-    if ($asset) {
-        $tempZip = Join-Path $env:TEMP "SlavonskaRavnica_update.zip"
-        $tempDir = Join-Path $env:TEMP "SlavonskaRavnica_update"
-        try {
-            Write-Log "Skidam novu verziju..."
+    try {
+        $content = $script:LatestVersion.content
+        if (-not $content) {
             $wc = New-Object System.Net.WebClient
-            $wc.DownloadFile($asset.browser_download_url, $tempZip)
+            $wc.Headers.Add("User-Agent", "SlavonskaRavnica-Launcher")
+            $content = $wc.DownloadString("$($script:UpdateRawUrl)?nocache=$([DateTime]::UtcNow.Ticks)")
             $wc.Dispose()
-
-            if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
-            [System.IO.Compression.ZipFile]::ExtractToDirectory($tempZip, $tempDir)
-
-            $ps1 = Get-ChildItem $tempDir -Recurse -Filter "SlavonskaRavnica.ps1" | Select-Object -First 1
-            if ($ps1) {
-                $dest = Join-Path $PSScriptRoot "SlavonskaRavnica.ps1"
-                Copy-Item $ps1.FullName $dest -Force
-                Write-Log "Update zavrsen! Restartaj launcher."
-                Show-SRDialog "Nova verzija instalirana!`nZatvori i ponovo pokreni launcher." "Update" "Success"
-            }
-            Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
-            Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-        } catch {
-            Write-Log "GRESKA update: $($_.Exception.Message)"
-            Start-Process $script:LatestVersion.url
         }
-    } else {
+        $dest = Join-Path $PSScriptRoot "SlavonskaRavnica.ps1"
+        # Backup
+        try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
+        [System.IO.File]::WriteAllText($dest, $content, [System.Text.UTF8Encoding]::new($false))
+        Write-Log "Update zavrsen! Restartaj launcher."
+        Show-SRDialog "Nova verzija instalirana!`nZatvori i ponovo pokreni launcher." "Update" "Success"
+    } catch {
+        Write-Log "GRESKA update: $($_.Exception.Message)"
         Start-Process $script:LatestVersion.url
     }
 }
@@ -1178,11 +1174,9 @@ $splashTimer.Add_Tick({
         2 {
             Update-Splash "Provjeravam update..." 25
             try {
-                if ($script:GitHubRepo) {
-                    $hasUpdate = Check-ForUpdate
-                    if ($hasUpdate) {
-                        Update-Splash "Nova verzija v$($script:LatestVersion.version) dostupna!" 30
-                    }
+                $hasUpdate = Check-ForUpdate
+                if ($hasUpdate) {
+                    Update-Splash "Nova verzija v$($script:LatestVersion.version) dostupna!" 30
                 }
             } catch {}
             $script:SplashStep = 3
