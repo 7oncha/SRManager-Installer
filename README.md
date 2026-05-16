@@ -87,6 +87,8 @@ Za lokalni publish mozes koristiti i helper skriptu:
 
 GitHub Actions workflow `.github/workflows/srmanager-dotnet.yml` builda launcher na PR/push, a kod objave GitHub Release-a automatski upload-a `SRManager.exe` release asset koji installer skida.
 
+Prije objave release-a prođi `docs/windows-qa-checklist.md` na Windows stroju jer WPF GUI i FS25 integracija ne mogu biti potpuno testirani na Linux agentu.
+
 ## Kontakt
 
 - **Discord:** [Slavonska Ravnica](https://discord.gg/slavonskaravnica)

@@ -104,6 +104,7 @@ The app depends on external services (game server XML API, license API on Railwa
 - Portani su kljucni servisi: config sync, license activate/heartbeat/session-end, server status XML, bot mod manifest + `mods.html` fallback, SHA-256 mod compare, mod download, `gameSettings.xml`, FS25 launch i exe self-update.
 - UI u C# portu pokriva Dashboard/Modovi/Postavke/Log i licencni modal, ali nije jos 1:1 vizualna kopija cijelog starog PowerShell XAML-a.
 - `.github/workflows/srmanager-dotnet.yml` builda C# launcher na PR/push i kod GitHub Release publish eventa upload-a `SRManager.exe` asset. Installer ocekuje asset tocno pod tim imenom.
+- Prije release-a na Windows stroju proci `docs/windows-qa-checklist.md`; Linux agent moze buildati WPF projekt, ali ne moze otvoriti GUI ni testirati FS25 integraciju.
 
 ---
 
