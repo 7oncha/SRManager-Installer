@@ -7,14 +7,15 @@ Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
 $script:InstallDir = Join-Path $env:USERPROFILE "SR Manager"
+$script:BotUrl     = "https://server-bot-production-a3a0.up.railway.app"
 $script:BaseUrl    = "https://raw.githubusercontent.com/7oncha/SRManager-Installer/master"
 $script:Files = @(
-    @{ name = "SlavonskaRavnica.ps1"; url = "$($script:BaseUrl)/SlavonskaRavnica.ps1" },
+    @{ name = "SlavonskaRavnica.ps1"; url = "$($script:BotUrl)/launcher/script"; fallback = "$($script:BaseUrl)/SlavonskaRavnica.ps1" },
+    @{ name = "sr_shared_config.json"; url = "$($script:BotUrl)/launcher/config"; fallback = "$($script:BaseUrl)/sr_shared_config.json" },
     @{ name = "SR Manager.vbs";      url = "$($script:BaseUrl)/SR%20Manager.vbs" },
     @{ name = "SR Manager.bat";      url = "$($script:BaseUrl)/SR%20Manager.bat" },
     @{ name = "sr_logo.ico";         url = "$($script:BaseUrl)/sr_logo.ico" },
-    @{ name = "sr_logo.png";         url = "$($script:BaseUrl)/sr_logo.png" },
-    @{ name = "sr_shared_config.json"; url = "$($script:BaseUrl)/sr_shared_config.json" }
+    @{ name = "sr_logo.png";         url = "$($script:BaseUrl)/sr_logo.png" }
 )
 
 [xml]$xaml = @"
@@ -286,7 +287,14 @@ $btnInstall.Add_Click({
                 $dest = Join-Path $installDir $f.name
                 $wc = New-Object System.Net.WebClient
                 $wc.Headers.Add("User-Agent", "SRManager-Installer")
-                $wc.DownloadFile($f.url, $dest)
+                try {
+                    $wc.DownloadFile($f.url, $dest)
+                } catch {
+                    # Ako primarni URL ne radi, pokusaj fallback
+                    if ($f.fallback) {
+                        $wc.DownloadFile($f.fallback, $dest)
+                    } else { throw }
+                }
                 $wc.Dispose()
             }
 

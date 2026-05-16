@@ -66,17 +66,18 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Download launcher script (.ps1) i ostale datoteke s GitHub raw-a
+:: Download launcher skripte i konfig s bota (privatni izvor)
+set "BOT_URL=https://server-bot-production-a3a0.up.railway.app"
 set "RAW_URL=https://raw.githubusercontent.com/%REPO%/master"
 echo  [3/6] Skidam launcher skriptu...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest '%RAW_URL%/SlavonskaRavnica.ps1' -OutFile '%INSTALL_DIR%\SlavonskaRavnica.ps1' -Headers @{'User-Agent'='SRManager'}; Write-Host '  OK' } catch { Write-Host '  GRESKA:' $_.Exception.Message; exit 1 }"
+  "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest '%BOT_URL%/launcher/script' -OutFile '%INSTALL_DIR%\SlavonskaRavnica.ps1' -Headers @{'User-Agent'='SRManager'}; Write-Host '  OK' } catch { Write-Host '  Bot nedostupan, skidam s GitHub-a...'; try { Invoke-WebRequest '%RAW_URL%/SlavonskaRavnica.ps1' -OutFile '%INSTALL_DIR%\SlavonskaRavnica.ps1' -Headers @{'User-Agent'='SRManager'}; Write-Host '  OK (GitHub fallback)' } catch { Write-Host '  GRESKA:' $_.Exception.Message; exit 1 } }"
 
-echo  [4/6] Skidam pomocne datoteke...
+echo  [4/6] Skidam konfig i pomocne datoteke...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ProgressPreference='SilentlyContinue'; $base='%RAW_URL%'; $dir='%INSTALL_DIR%'; $h=@{'User-Agent'='SRManager'}; foreach($f in @('sr_shared_config.json','SR Manager.bat','SR Manager.vbs')) { try { Invoke-WebRequest \"$base/$f\" -OutFile \"$dir\$f\" -Headers $h } catch {} }; Write-Host '  OK'"
+  "$ProgressPreference='SilentlyContinue'; $bot='%BOT_URL%'; $raw='%RAW_URL%'; $dir='%INSTALL_DIR%'; $h=@{'User-Agent'='SRManager'}; try { Invoke-WebRequest \"$bot/launcher/config\" -OutFile \"$dir\sr_shared_config.json\" -Headers $h } catch { try { Invoke-WebRequest \"$raw/sr_shared_config.json\" -OutFile \"$dir\sr_shared_config.json\" -Headers $h } catch {} }; foreach($f in @('SR Manager.bat','SR Manager.vbs')) { try { Invoke-WebRequest \"$raw/$f\" -OutFile \"$dir\$f\" -Headers $h } catch {} }; Write-Host '  OK'"
 
-:: Download icon (from repo raw content)
+:: Download ikone
 echo  [5/6] Skidam ikonu...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest '%RAW_URL%/sr_logo.ico' -OutFile '%INSTALL_DIR%\%ICO_NAME%'; Invoke-WebRequest '%RAW_URL%/sr_logo.png' -OutFile '%INSTALL_DIR%\sr_logo.png' } catch {}; Write-Host '  OK'"
