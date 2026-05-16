@@ -318,7 +318,10 @@ public sealed class LicenseService
                 : LicenseApiResult.Fail(ReadString(root, "reason") ?? (success ? "Neispravan odgovor servera." : "HTTP greska."), ReadString(root, "status") ?? "unknown");
 
             result.DiscordId = ReadString(root, "discordId") ?? string.Empty;
-            result.Key = ReadString(root, "key") ?? string.Empty;
+            result.Key = ReadString(root, "key")
+                ?? ReadString(root, "licenseKey")
+                ?? ReadString(root, "trialKey")
+                ?? string.Empty;
             result.Permanent = root.TryGetProperty("permanent", out var permanent) && permanent.ValueKind == JsonValueKind.True;
             if (root.TryGetProperty("expiresAt", out var expiresAt))
             {
