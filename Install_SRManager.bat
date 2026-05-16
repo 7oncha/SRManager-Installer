@@ -4,18 +4,18 @@ chcp 65001 >nul 2>&1
 title Slavonska Ravnica - Installer
 
 set "DEFAULT_DIR=%LOCALAPPDATA%\SRManager"
-set "REPO=7oncha/SRManager-Installer"
-set "EXE_NAME=SRManager.exe"
-set "ICO_NAME=sr_logo.ico"
+set "BOT_URL=https://server-bot-production-a3a0.up.railway.app"
+set "RAW_URL=https://raw.githubusercontent.com/7oncha/SRManager-Installer/master"
+set "RELEASE_URL=https://github.com/7oncha/SRManager-Installer/releases/latest/download"
 
 echo.
-echo  ╔══════════════════════════════════════════════╗
-echo  ║     Slavonska Ravnica - SR Manager           ║
-echo  ║     Installer v1.0                           ║
-echo  ╚══════════════════════════════════════════════╝
+echo  ========================================================
+echo     Slavonska Ravnica - SR Manager
+echo     Installer v2.0
+echo  ========================================================
 echo.
 
-:: ── Ask install location ──
+:: Pitaj za lokaciju instalacije
 echo  Zadani folder: %DEFAULT_DIR%
 echo.
 set /p "CUSTOM_DIR=  Unesi folder za instalaciju (ili ENTER za zadani): "
@@ -26,86 +26,67 @@ if "%CUSTOM_DIR%"=="" (
     set "INSTALL_DIR=%CUSTOM_DIR%"
 )
 
-:: Remove trailing backslash if present
 if "%INSTALL_DIR:~-1%"=="\" set "INSTALL_DIR=%INSTALL_DIR:~0,-1%"
 
 echo.
 echo  Instalacija u: %INSTALL_DIR%
 echo.
 
-:: Create install directory
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
-:: Get latest release download URL from GitHub API
-echo  [1/4] Trazim najnoviju verziju...
-set "API_URL=https://api.github.com/repos/%REPO%/releases/latest"
+:: Skidam datoteke koristeci certutil (ugraden u Windows, nema AV problema)
+echo  [1/5] Skidam SRManager.exe...
+certutil -urlcache -split -f "%RELEASE_URL%/SRManager.exe" "%INSTALL_DIR%\SRManager.exe" >nul 2>&1
+if exist "%INSTALL_DIR%\SRManager.exe" (echo    OK) else (echo    GRESKA - provjeri internet & pause & exit /b 1)
 
-:: Try PowerShell to download
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ProgressPreference='SilentlyContinue'; try { $r = Invoke-RestMethod '%API_URL%' -Headers @{'User-Agent'='SRManager'}; $asset = $r.assets | Where-Object { $_.name -eq '%EXE_NAME%' } | Select-Object -First 1; if($asset) { $asset.browser_download_url | Out-File '%TEMP%\sr_dl_url.txt' -Encoding ascii -NoNewline; Write-Host '  Verzija:' $r.tag_name } else { Write-Host '  GRESKA: .exe nije pronadjen u releaseu'; exit 1 } } catch { Write-Host '  GRESKA:' $_.Exception.Message; exit 1 }"
-
-if %errorlevel% neq 0 (
-    echo.
-    echo  Greska pri dohvatu verzije. Provjeri internet konekciju.
-    pause
-    exit /b 1
+echo  [2/5] Skidam launcher skriptu...
+certutil -urlcache -split -f "%BOT_URL%/launcher/script" "%INSTALL_DIR%\SlavonskaRavnica.ps1" >nul 2>&1
+if not exist "%INSTALL_DIR%\SlavonskaRavnica.ps1" (
+    certutil -urlcache -split -f "%RAW_URL%/SlavonskaRavnica.ps1" "%INSTALL_DIR%\SlavonskaRavnica.ps1" >nul 2>&1
 )
+if exist "%INSTALL_DIR%\SlavonskaRavnica.ps1" (echo    OK) else (echo    GRESKA & pause & exit /b 1)
 
-set /p DL_URL=<"%TEMP%\sr_dl_url.txt"
-del "%TEMP%\sr_dl_url.txt" 2>nul
-
-:: Download exe
-echo  [2/6] Skidam SRManager.exe...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest '%DL_URL%' -OutFile '%INSTALL_DIR%\%EXE_NAME%' -Headers @{'User-Agent'='SRManager'}; Write-Host '  OK' } catch { Write-Host '  GRESKA:' $_.Exception.Message; exit 1 }"
-
-if %errorlevel% neq 0 (
-    echo.
-    echo  Greska pri skidanju. Provjeri internet.
-    pause
-    exit /b 1
+echo  [3/5] Skidam konfiguraciju...
+certutil -urlcache -split -f "%BOT_URL%/launcher/config" "%INSTALL_DIR%\sr_shared_config.json" >nul 2>&1
+if not exist "%INSTALL_DIR%\sr_shared_config.json" (
+    certutil -urlcache -split -f "%RAW_URL%/sr_shared_config.json" "%INSTALL_DIR%\sr_shared_config.json" >nul 2>&1
 )
+certutil -urlcache -split -f "%RAW_URL%/SR%%20Manager.bat" "%INSTALL_DIR%\SR Manager.bat" >nul 2>&1
+certutil -urlcache -split -f "%RAW_URL%/SR%%20Manager.vbs" "%INSTALL_DIR%\SR Manager.vbs" >nul 2>&1
+echo    OK
 
-:: Download launcher skripte i konfig s bota (privatni izvor)
-set "BOT_URL=https://server-bot-production-a3a0.up.railway.app"
-set "RAW_URL=https://raw.githubusercontent.com/%REPO%/master"
-echo  [3/6] Skidam launcher skriptu...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest '%BOT_URL%/launcher/script' -OutFile '%INSTALL_DIR%\SlavonskaRavnica.ps1' -Headers @{'User-Agent'='SRManager'}; Write-Host '  OK' } catch { Write-Host '  Bot nedostupan, skidam s GitHub-a...'; try { Invoke-WebRequest '%RAW_URL%/SlavonskaRavnica.ps1' -OutFile '%INSTALL_DIR%\SlavonskaRavnica.ps1' -Headers @{'User-Agent'='SRManager'}; Write-Host '  OK (GitHub fallback)' } catch { Write-Host '  GRESKA:' $_.Exception.Message; exit 1 } }"
+echo  [4/5] Skidam ikone...
+certutil -urlcache -split -f "%RAW_URL%/sr_logo.ico" "%INSTALL_DIR%\sr_logo.ico" >nul 2>&1
+certutil -urlcache -split -f "%RAW_URL%/sr_logo.png" "%INSTALL_DIR%\sr_logo.png" >nul 2>&1
+echo    OK
 
-echo  [4/6] Skidam konfig i pomocne datoteke...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ProgressPreference='SilentlyContinue'; $bot='%BOT_URL%'; $raw='%RAW_URL%'; $dir='%INSTALL_DIR%'; $h=@{'User-Agent'='SRManager'}; try { Invoke-WebRequest \"$bot/launcher/config\" -OutFile \"$dir\sr_shared_config.json\" -Headers $h } catch { try { Invoke-WebRequest \"$raw/sr_shared_config.json\" -OutFile \"$dir\sr_shared_config.json\" -Headers $h } catch {} }; foreach($f in @('SR Manager.bat','SR Manager.vbs')) { try { Invoke-WebRequest \"$raw/$f\" -OutFile \"$dir\$f\" -Headers $h } catch {} }; Write-Host '  OK'"
-
-:: Download ikone
-echo  [5/6] Skidam ikonu...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest '%RAW_URL%/sr_logo.ico' -OutFile '%INSTALL_DIR%\%ICO_NAME%'; Invoke-WebRequest '%RAW_URL%/sr_logo.png' -OutFile '%INSTALL_DIR%\sr_logo.png' } catch {}; Write-Host '  OK'"
-
-:: ── Ask about desktop shortcut ──
-echo  [6/6] Desktop shortcut
-echo.
-set /p "MAKE_SHORTCUT=  Zelis li kreirati Desktop ikonu? (D/N): "
-
-if /i "%MAKE_SHORTCUT%"=="D" (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-      "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath('Desktop'), 'SR Manager.lnk')); $sc.TargetPath = '%INSTALL_DIR%\%EXE_NAME%'; $sc.WorkingDirectory = '%INSTALL_DIR%'; $ico = '%INSTALL_DIR%\%ICO_NAME%'; if(Test-Path $ico) { $sc.IconLocation = $ico }; $sc.Description = 'Slavonska Ravnica Launcher'; $sc.Save(); Write-Host '  Shortcut kreiran!'"
-) else (
-    echo   Shortcut preskocen.
-)
+echo  [5/5] Kreiram Desktop shortcut...
+set "DESKTOP=%USERPROFILE%\Desktop"
+set "SHORTCUT=%DESKTOP%\SR Manager.lnk"
+:: Kreiraj shortcut koristeci mshta (bez PowerShella)
+echo Set ws = CreateObject("WScript.Shell") > "%TEMP%\sr_shortcut.vbs"
+echo Set sc = ws.CreateShortcut("%SHORTCUT%") >> "%TEMP%\sr_shortcut.vbs"
+echo sc.TargetPath = "%INSTALL_DIR%\SRManager.exe" >> "%TEMP%\sr_shortcut.vbs"
+echo sc.WorkingDirectory = "%INSTALL_DIR%" >> "%TEMP%\sr_shortcut.vbs"
+echo sc.IconLocation = "%INSTALL_DIR%\sr_logo.ico" >> "%TEMP%\sr_shortcut.vbs"
+echo sc.Description = "Slavonska Ravnica Launcher" >> "%TEMP%\sr_shortcut.vbs"
+echo sc.Save >> "%TEMP%\sr_shortcut.vbs"
+cscript //nologo "%TEMP%\sr_shortcut.vbs" >nul 2>&1
+del "%TEMP%\sr_shortcut.vbs" >nul 2>&1
+echo    Shortcut kreiran!
 
 echo.
-echo  ╔══════════════════════════════════════════════╗
-echo  ║  Instalacija zavrsena!                       ║
-echo  ║                                              ║
-echo  ║  Lokacija: %INSTALL_DIR%
-echo  ║  Buduce azuriranje je automatsko.            ║
-echo  ╚══════════════════════════════════════════════╝
+echo  ========================================================
+echo     Instalacija zavrsena!
+echo.
+echo     Lokacija: %INSTALL_DIR%
+echo     Pokreni SR Manager sa Desktopa.
+echo  ========================================================
 echo.
 
 set /p "RUN_NOW=  Zelis li pokrenuti SR Manager? (D/N): "
 if /i "%RUN_NOW%"=="D" (
-    start "" "%INSTALL_DIR%\%EXE_NAME%"
+    start "" "%INSTALL_DIR%\SRManager.exe"
 )
 echo.
 echo  Gotovo!
