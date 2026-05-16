@@ -155,5 +155,6 @@ The app depends on external services (game server XML API, license API on Railwa
 | `GET /api/mods/manifest` | Bearer | `getManifest()` | `server/modSync.ts` |
 | `GET /api/mods/changes-since` | Bearer | `getChangesSince()` | `server/modSync.ts` |
 
-**POZNATI BUG — mod endpointi vraćaju 401:**
-U `server/routes.ts` linija 136-145, session auth middleware (`app.use('/api', ...)`) propušta `/license/` ali **NE propušta** `/mods/`. Kad launcher pozove `/api/mods/manifest` samo s Bearer tokenom (bez session cookie-ja), middleware ga blokira s `401 { error: 'Not authenticated' }` prije nego zahtjev stigne do `licenseAuth`. Fix: dodati `/mods/` u `openPaths` ili dodati `if (req.path.startsWith('/mods/')) return next();` nakon linije 142.
+**FIXANO (PR #2, #3):**
+1. Session middleware sada propušta `/mods/` putanje (isti pattern kao `/license/`)
+2. `resolveServerId()` funkcija resolva server po ID-u ili imenu (launcher šalje ime jer config nema `id` polje)
