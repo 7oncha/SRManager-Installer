@@ -1,2 +1,4 @@
 SRManager.exe
 *.exe
+bin/
+obj/

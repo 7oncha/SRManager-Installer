@@ -1,4 +1,0 @@
-/workspace/src/SRManager/bin/Release/net8.0-windows/win-x64/publish/SRManager.pdb
-/workspace/src/SRManager/bin/Release/net8.0-windows/win-x64/publish/sr_shared_config.json
-/workspace/src/SRManager/bin/Release/net8.0-windows/win-x64/publish/sr_logo.png
-/workspace/src/SRManager/bin/Release/net8.0-windows/win-x64/publish/SRManager.exe
