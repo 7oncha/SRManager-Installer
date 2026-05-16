@@ -114,19 +114,46 @@ The app depends on external services (game server XML API, license API on Railwa
 
 **Napomena:** `public/logo.png` je referenciran u kodu ali **nije** committan u repo — slike će biti broken bez tog filea.
 
-### Farmbuddy Bot API (Railway deployment)
+### ktomasic66-coder/Server-Bot (Farmbuddy Bot — privatni repo)
 
-**URL:** `https://server-bot-production-a3a0.up.railway.app`
-**Codebase:** Privatni/nedostupni repo (možda `ktomasic66-coder/Server-Bot` — treba pristup)
+**URL produkcije:** `https://server-bot-production-a3a0.up.railway.app`
+**Stack:** TypeScript, Express 5, Discord.js 14, Drizzle ORM, MySQL (runtime storage), Vite + React (admin panel), basic-ftp (telemetry)
+**Node:** >=20.18.0 (`.nvmrc`: 22)
+
+**Struktura:**
+- `server/index.ts` — entry point (Express + Vite dev)
+- `server/routes.ts` — svi API routes (~1900 linija), auth middleware, launcher distribucija
+- `server/bot.ts` — Discord bot (~2000+ linija): slash komande, sync timeri, paneli, moderacija, muzika
+- `server/license.ts` — licence sustav: `apiActivate`, `apiHeartbeat`, `apiSessionEnd`, `apiTrialRequest`
+- `server/modSync.ts` — FTP poll `/profile/mods/*.zip`, SHA-256 hash, manifest
+- `server/modScheduler.ts` — interval poll + notifikacije
+- `server/sync.ts` — `FarmSyncService`: FTP telemetry (polja, vozila, silosi, životinje, vrijeme)
+- `server/storage.ts` — MySQL-backed document collections (`app_documents` tablica)
+- `shared/schema.ts` — Drizzle PostgreSQL schema (farms, fields, vehicles, players)
+- `client/` — React admin panel (Dashboard, MojaFarma, StatusCard, BackupPanel...)
+
+**Pokretanje:**
+- `npm run dev` → `tsx server/index.ts` (Express + Vite dev server)
+- `npm run build` → client build + esbuild server bundle
+- `npm run start` → `node dist/index.mjs`
+
+**Env varijable (ključne):**
+- `DATABASE_URL` — MySQL connection string (runtime storage za licence, modove, kolekcije)
+- `DISCORD_TOKEN` — Discord bot token
+- `LICENSE_API_TOKEN` — Bearer token koji launcher šalje (ovo je ono u `sr_shared_config.json → licenseApi.token`)
+- `FS25_SERVERS` — JSON array za multi-server FTP config
+- `PORT` — HTTP port (default 3000)
 
 **API endpointi koje launcher koristi:**
-- `POST /api/license/activate` — aktivacija licence (key + HWID)
-- `POST /api/license/heartbeat` — heartbeat za aktivnu sesiju
-- `POST /api/license/session-end` — kraj sesije
-- `POST /api/license/trial` — trial licence
-- `GET /api/mods/manifest?server=<id>` — lista modova s SHA-256 hashevima
-- `GET /api/mods/changes-since?server=<id>&since=<date>` — promjene modova
 
-**Auth:** Bearer token iz `sr_shared_config.json` → `licenseApi.token`
+| Endpoint | Auth | Handler | Datoteka |
+|----------|------|---------|----------|
+| `POST /api/license/activate` | Bearer | `apiActivate()` | `server/license.ts` |
+| `POST /api/license/heartbeat` | Bearer | `apiHeartbeat()` | `server/license.ts` |
+| `POST /api/license/session-end` | Bearer | `apiSessionEnd()` | `server/license.ts` |
+| `POST /api/license/trial` | Javni (IP rate limit) | `apiTrialRequest()` | `server/license.ts` |
+| `GET /api/mods/manifest` | Bearer | `getManifest()` | `server/modSync.ts` |
+| `GET /api/mods/changes-since` | Bearer | `getChangesSince()` | `server/modSync.ts` |
 
-**Trenutni status:** Mod endpointi vraćaju HTTP 401 — token je vjerojatno istekao/promijenjen.
+**POZNATI BUG — mod endpointi vraćaju 401:**
+U `server/routes.ts` linija 136-145, session auth middleware (`app.use('/api', ...)`) propušta `/license/` ali **NE propušta** `/mods/`. Kad launcher pozove `/api/mods/manifest` samo s Bearer tokenom (bez session cookie-ja), middleware ga blokira s `401 { error: 'Not authenticated' }` prije nego zahtjev stigne do `licenseAuth`. Fix: dodati `/mods/` u `openPaths` ili dodati `if (req.path.startsWith('/mods/')) return next();` nakon linije 142.
