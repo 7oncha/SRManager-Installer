@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>SR Manager — Download</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: "Segoe UI", system-ui, sans-serif;
+      background: #0d0d0d; color: #eee; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
+    .card {
+      max-width: 420px; width: 100%; background: #161616;
+      border: 1px solid #3a2e10; border-radius: 14px; padding: 24px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.5);
+    }
+    .logo { width: 56px; height: 56px; border-radius: 12px; margin-bottom: 12px; }
+    h1 { margin: 0 0 6px; font-size: 1.25rem; color: #F5C518; }
+    p { margin: 0 0 16px; font-size: 0.9rem; color: #aaa; line-height: 1.45; }
+    .ver { font-size: 0.8rem; color: #666; margin-bottom: 12px; }
+    .feat { font-size: 0.78rem; color: #888; margin: 0 0 16px; padding-left: 18px; line-height: 1.5; }
+    .feat li { margin-bottom: 4px; }
+    .btn {
+      display: block; text-align: center; background: #F5C518; color: #111;
+      font-weight: 700; text-decoration: none; padding: 12px 16px; border-radius: 8px;
+    }
+    .btn:hover { filter: brightness(1.08); }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <img class="logo" src="https://raw.githubusercontent.com/7oncha/SRManager-Installer/master/sr_logo.png" alt="SR"/>
+    <h1>SR Manager</h1>
+    <p id="desc">Skini portable ZIP, raspakiraj i pokreni SRManager.exe.</p>
+    <div class="ver" id="ver">Ucitavam verziju...</div>
+    <ul class="feat" id="feat" hidden></ul>
+    <a class="btn" id="btn" href="#">Skini SR_Manager.zip</a>
+  </div>
+  <script>
+    (async function () {
+      const manifestUrl = 'https://raw.githubusercontent.com/7oncha/SRManager-Installer/master/launcher/manifest.json';
+      const btn = document.getElementById('btn');
+      const ver = document.getElementById('ver');
+      const feat = document.getElementById('feat');
+      function showFeatures(list) {
+        if (!list || !list.length) return;
+        feat.innerHTML = '';
+        list.forEach(function (t) {
+          const li = document.createElement('li');
+          li.textContent = t;
+          feat.appendChild(li);
+        });
+        feat.hidden = false;
+      }
+      try {
+        const r = await fetch(manifestUrl + '?t=' + Date.now());
+        const m = await r.json();
+        if (m.version) ver.textContent = 'Verzija ' + m.version;
+        if (m.downloadUrl) btn.href = m.downloadUrl;
+        if (m.instructions) document.getElementById('desc').textContent = m.instructions;
+        showFeatures(m.features);
+      } catch (e) {
+        ver.textContent = 'v2.1.0.5';
+        btn.href = 'https://github.com/7oncha/SRManager-Installer/releases/latest/download/SR_Manager.zip';
+      }
+    })();
+  </script>
+</body>
+</html>

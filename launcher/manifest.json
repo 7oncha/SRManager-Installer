@@ -1,0 +1,16 @@
+﻿{
+    "version":  "2.1.0.6",
+    "installType":  "zip",
+    "features":  [
+                     "Vise FS25 servera + ping i live status",
+                     "Licenca / HWID / probna 3 dana (bot API)",
+                     "SHA-256 mod manifest i sync (server-authoritative)",
+                     "GitHub auto-update (ZIP + SlavonskaRavnica.ps1)",
+                     "Admin mod, bot config sync, session heartbeat"
+                 ],
+    "downloadUrl":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.1.0.6/SR_Manager.zip",
+    "instructions":  "Skini ZIP, raspakiraj u folder, pokreni Pokreni SR Manager.bat (NE SRManager.exe)",
+    "updatedAt":  "2026-05-16T21:28:40.1057745Z",
+    "downloadFile":  "SR_Manager.zip",
+    "releasePageUrl":  "https://github.com/7oncha/SRManager-Installer/releases/tag/v2.1.0.6"
+}
