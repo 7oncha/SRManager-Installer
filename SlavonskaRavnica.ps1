@@ -702,62 +702,133 @@ function Show-SRConfirm {
 }
 
 # ============================================================
-# AUTO-UPDATE (raw fetch iz javnog SRManager-Installer repoa)
+# AUTO-UPDATE
+# 1. Bot endpoint (/launcher/latest) — dinamicki dohvaca najnoviji GitHub release
+# 2. Fallback: GitHub Releases API — direktno provjerava releaseove
 # ============================================================
-$script:UpdateRawUrl = "https://raw.githubusercontent.com/7oncha/SRManager-Installer/master/SlavonskaRavnica.ps1"
+$script:UpdateGitHubRepo = "7oncha/SRManager-Installer"
 
 function Check-ForUpdate {
-    try {
-        $url = "$($script:UpdateRawUrl)?nocache=$([DateTime]::UtcNow.Ticks)"
-        Write-Log "Provjeravam update: $($script:UpdateRawUrl)"
-        $wc = New-Object System.Net.WebClient
-        $wc.Headers.Add("User-Agent", "SlavonskaRavnica-Launcher")
-        $wc.Headers.Add("Cache-Control", "no-cache")
-        $content = $wc.DownloadString($url)
-        $wc.Dispose()
+    $headers = @{ "User-Agent" = "SlavonskaRavnica-Launcher" }
 
-        $m = [regex]::Match($content, '\$script:AppVersion\s*=\s*"([^"]+)"')
-        if (-not $m.Success) {
-            Write-Log "Auto-update: ne mogu izvuci remote AppVersion"
+    # 1. Primarni izvor: bot endpoint (vraca verziju i download URL iz GitHub releasea)
+    try {
+        $api = Get-LicenseApiConfig
+        if ($api) {
+            $url = "$($api.url)/launcher/latest"
+            Write-Log "Provjeravam update (bot): $url"
+            $latest = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 10
+            if ($latest -and $latest.version -and $latest.version -ne $script:AppVersion) {
+                # Koristi downloadUrl od bota koji pokazuje na GitHub release
+                $dlUrl = if ($latest.downloadUrl) { $latest.downloadUrl } else { "https://github.com/$($script:UpdateGitHubRepo)/releases/latest" }
+                $script:LatestVersion = @{
+                    version = $latest.version
+                    url     = $dlUrl
+                    notes   = $latest.notes
+                    assets  = @(@{ name = $latest.file; browser_download_url = $dlUrl })
+                    sha256  = $latest.sha256
+                }
+                Write-Log "Nova verzija (bot): v$($latest.version) | Lokalna: v$($script:AppVersion)"
+                return $true
+            }
+            Write-Log "Aplikacija je azurna (bot endpoint)."
             return $false
         }
-        $remoteVersion = $m.Groups[1].Value
-        Write-Log "Remote verzija: v$remoteVersion | Lokalna: v$($script:AppVersion)"
+    } catch {
+        Write-Log "Bot update endpoint nedostupan: $($_.Exception.Message)"
+    }
+
+    # 2. Fallback: GitHub Releases API
+    try {
+        $url = "https://api.github.com/repos/$($script:UpdateGitHubRepo)/releases/latest"
+        Write-Log "Provjeravam update (GitHub): $url"
+        $release = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 10
+        $remoteVersion = $release.tag_name -replace '^v',''
         if ($remoteVersion -and $remoteVersion -ne $script:AppVersion) {
             $script:LatestVersion = @{
                 version = $remoteVersion
-                url     = "https://github.com/7oncha/SRManager-Installer/releases/latest"
-                notes   = ""
-                content = $content
+                url     = $release.html_url
+                notes   = $release.body
+                assets  = $release.assets
             }
+            Write-Log "Nova verzija (GitHub): v$remoteVersion | Lokalna: v$($script:AppVersion)"
             return $true
-        } else {
-            Write-Log "Aplikacija je azurna."
         }
+        Write-Log "Aplikacija je azurna (GitHub)."
     } catch {
-        Write-Log "Auto-update greska: $($_.Exception.Message)"
+        Write-Log "GitHub API greska: $($_.Exception.Message)"
     }
     return $false
 }
 
 function Download-Update {
     if (-not $script:LatestVersion) { return }
-    try {
-        $content = $script:LatestVersion.content
-        if (-not $content) {
+    # Pronadji zip ili exe asset
+    $asset = $null
+    if ($script:LatestVersion.assets) {
+        $asset = $script:LatestVersion.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+        if (-not $asset) {
+            $asset = $script:LatestVersion.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1
+        }
+    }
+
+    if ($asset -and $asset.browser_download_url) {
+        $dlUrl = $asset.browser_download_url
+        $isZip = $asset.name -like "*.zip"
+        $isExe = $asset.name -like "*.exe"
+
+        try {
             $wc = New-Object System.Net.WebClient
             $wc.Headers.Add("User-Agent", "SlavonskaRavnica-Launcher")
-            $content = $wc.DownloadString("$($script:UpdateRawUrl)?nocache=$([DateTime]::UtcNow.Ticks)")
-            $wc.Dispose()
+
+            if ($isExe) {
+                # Direktno skini .exe
+                $dest = Join-Path $PSScriptRoot "SRManager.exe"
+                try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
+                Write-Log "Skidam .exe: $dlUrl"
+                $wc.DownloadFile($dlUrl, $dest)
+                $wc.Dispose()
+                Write-Log "Update zavrsen! Restartaj launcher."
+                Show-SRDialog "Nova verzija v$($script:LatestVersion.version) instalirana!`nZatvori i ponovo pokreni launcher." "Update" "Success"
+            } elseif ($isZip) {
+                # Skini zip, raspakiraj, zamijeni datoteke
+                $tempZip = Join-Path $env:TEMP "SlavonskaRavnica_update.zip"
+                $tempDir = Join-Path $env:TEMP "SlavonskaRavnica_update"
+                Write-Log "Skidam .zip: $dlUrl"
+                $wc.DownloadFile($dlUrl, $tempZip)
+                $wc.Dispose()
+
+                if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
+                Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+                [System.IO.Compression.ZipFile]::ExtractToDirectory($tempZip, $tempDir)
+
+                # Zamijeni .ps1 ako postoji u zipu
+                $ps1 = Get-ChildItem $tempDir -Recurse -Filter "SlavonskaRavnica.ps1" | Select-Object -First 1
+                if ($ps1) {
+                    $dest = Join-Path $PSScriptRoot "SlavonskaRavnica.ps1"
+                    try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
+                    Copy-Item $ps1.FullName $dest -Force
+                }
+                # Zamijeni .exe ako postoji u zipu
+                $exe = Get-ChildItem $tempDir -Recurse -Filter "SRManager.exe" | Select-Object -First 1
+                if ($exe) {
+                    $dest = Join-Path $PSScriptRoot "SRManager.exe"
+                    try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
+                    Copy-Item $exe.FullName $dest -Force
+                }
+
+                Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
+                Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+                Write-Log "Update zavrsen! Restartaj launcher."
+                Show-SRDialog "Nova verzija v$($script:LatestVersion.version) instalirana!`nZatvori i ponovo pokreni launcher." "Update" "Success"
+            }
+        } catch {
+            Write-Log "GRESKA update download: $($_.Exception.Message)"
+            Start-Process $script:LatestVersion.url
         }
-        $dest = Join-Path $PSScriptRoot "SlavonskaRavnica.ps1"
-        # Backup
-        try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
-        [System.IO.File]::WriteAllText($dest, $content, [System.Text.UTF8Encoding]::new($false))
-        Write-Log "Update zavrsen! Restartaj launcher."
-        Show-SRDialog "Nova verzija instalirana!`nZatvori i ponovo pokreni launcher." "Update" "Success"
-    } catch {
-        Write-Log "GRESKA update: $($_.Exception.Message)"
+    } else {
+        # Nema asseta — otvori release stranicu u browseru
+        Write-Log "Nema downloadable asseta, otvaram browser..."
         Start-Process $script:LatestVersion.url
     }
 }
