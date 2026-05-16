@@ -34,7 +34,7 @@ try {
 # ============================================================
 # CONSTANTS
 # ============================================================
-$script:AppVersion = "2.1.0.3"
+$script:AppVersion = "2.1.0.4"
 $script:ConfigPath = Join-Path $PSScriptRoot "sr_config.json"
 $script:IsAdmin = $false
 $script:GitHubRepo = ""
@@ -763,53 +763,57 @@ function Check-ForUpdate {
 
 function Download-Update {
     if (-not $script:LatestVersion) { return }
-    # Pronadji zip ili exe asset
-    $asset = $null
-    if ($script:LatestVersion.assets) {
-        $asset = $script:LatestVersion.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
-        if (-not $asset) {
-            $asset = $script:LatestVersion.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1
-        }
-    }
+    $updated = $false
 
-    if ($asset -and $asset.browser_download_url) {
-        $dlUrl = $asset.browser_download_url
-        $isZip = $asset.name -like "*.zip"
-        $isExe = $asset.name -like "*.exe"
+    try {
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add("User-Agent", "SlavonskaRavnica-Launcher")
 
+        # 1. Uvijek azuriraj .ps1 skriptu s GitHub raw-a (source of truth)
         try {
-            $wc = New-Object System.Net.WebClient
-            $wc.Headers.Add("User-Agent", "SlavonskaRavnica-Launcher")
+            $rawUrl = "https://raw.githubusercontent.com/$($script:UpdateGitHubRepo)/master/SlavonskaRavnica.ps1?nocache=$([DateTime]::UtcNow.Ticks)"
+            Write-Log "Skidam najnoviju skriptu..."
+            $ps1Content = $wc.DownloadString($rawUrl)
+            if ($ps1Content -and $ps1Content.Length -gt 1000) {
+                $dest = Join-Path $PSScriptRoot "SlavonskaRavnica.ps1"
+                try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
+                [System.IO.File]::WriteAllText($dest, $ps1Content, [System.Text.UTF8Encoding]::new($false))
+                Write-Log "Skripta azurirana."
+                $updated = $true
+            }
+        } catch { Write-Log "GRESKA ps1 download: $($_.Exception.Message)" }
+
+        # 2. Skini release assete (.exe ili .zip) ako postoje
+        $asset = $null
+        if ($script:LatestVersion.assets) {
+            $asset = $script:LatestVersion.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+            if (-not $asset) {
+                $asset = $script:LatestVersion.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1
+            }
+        }
+
+        if ($asset -and $asset.browser_download_url) {
+            $dlUrl = $asset.browser_download_url
+            $isZip = $asset.name -like "*.zip"
+            $isExe = $asset.name -like "*.exe"
 
             if ($isExe) {
-                # Direktno skini .exe
                 $dest = Join-Path $PSScriptRoot "SRManager.exe"
                 try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
                 Write-Log "Skidam .exe: $dlUrl"
                 $wc.DownloadFile($dlUrl, $dest)
-                $wc.Dispose()
-                Write-Log "Update zavrsen! Restartaj launcher."
-                Show-SRDialog "Nova verzija v$($script:LatestVersion.version) instalirana!`nZatvori i ponovo pokreni launcher." "Update" "Success"
+                $updated = $true
             } elseif ($isZip) {
-                # Skini zip, raspakiraj, zamijeni datoteke
                 $tempZip = Join-Path $env:TEMP "SlavonskaRavnica_update.zip"
                 $tempDir = Join-Path $env:TEMP "SlavonskaRavnica_update"
                 Write-Log "Skidam .zip: $dlUrl"
                 $wc.DownloadFile($dlUrl, $tempZip)
-                $wc.Dispose()
 
                 if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
                 Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
                 [System.IO.Compression.ZipFile]::ExtractToDirectory($tempZip, $tempDir)
 
-                # Zamijeni .ps1 ako postoji u zipu
-                $ps1 = Get-ChildItem $tempDir -Recurse -Filter "SlavonskaRavnica.ps1" | Select-Object -First 1
-                if ($ps1) {
-                    $dest = Join-Path $PSScriptRoot "SlavonskaRavnica.ps1"
-                    try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
-                    Copy-Item $ps1.FullName $dest -Force
-                }
-                # Zamijeni .exe ako postoji u zipu
+                # Zamijeni datoteke iz zipa (ne prepisuj .ps1 jer je vec azuriran gore)
                 $exe = Get-ChildItem $tempDir -Recurse -Filter "SRManager.exe" | Select-Object -First 1
                 if ($exe) {
                     $dest = Join-Path $PSScriptRoot "SRManager.exe"
@@ -819,15 +823,21 @@ function Download-Update {
 
                 Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
                 Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-                Write-Log "Update zavrsen! Restartaj launcher."
-                Show-SRDialog "Nova verzija v$($script:LatestVersion.version) instalirana!`nZatvori i ponovo pokreni launcher." "Update" "Success"
+                $updated = $true
             }
-        } catch {
-            Write-Log "GRESKA update download: $($_.Exception.Message)"
-            Start-Process $script:LatestVersion.url
         }
+
+        $wc.Dispose()
+    } catch {
+        Write-Log "GRESKA update download: $($_.Exception.Message)"
+        Start-Process $script:LatestVersion.url
+        return
+    }
+
+    if ($updated) {
+        Write-Log "Update zavrsen! Restartaj launcher."
+        Show-SRDialog "Nova verzija v$($script:LatestVersion.version) instalirana!`nZatvori i ponovo pokreni launcher." "Update" "Success"
     } else {
-        # Nema asseta — otvori release stranicu u browseru
         Write-Log "Nema downloadable asseta, otvaram browser..."
         Start-Process $script:LatestVersion.url
     }
