@@ -55,7 +55,7 @@ set /p DL_URL=<"%TEMP%\sr_dl_url.txt"
 del "%TEMP%\sr_dl_url.txt" 2>nul
 
 :: Download exe
-echo  [2/4] Skidam SRManager.exe...
+echo  [2/6] Skidam SRManager.exe...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest '%DL_URL%' -OutFile '%INSTALL_DIR%\%EXE_NAME%' -Headers @{'User-Agent'='SRManager'}; Write-Host '  OK' } catch { Write-Host '  GRESKA:' $_.Exception.Message; exit 1 }"
 
@@ -66,13 +66,23 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Download icon (from repo raw content)
-echo  [3/4] Skidam ikonu...
+:: Download launcher script (.ps1) i ostale datoteke s GitHub raw-a
+set "RAW_URL=https://raw.githubusercontent.com/%REPO%/master"
+echo  [3/6] Skidam launcher skriptu...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest 'https://raw.githubusercontent.com/%REPO%/main/sr_logo.ico' -OutFile '%INSTALL_DIR%\%ICO_NAME%'; Write-Host '  OK' } catch { Write-Host '  Ikona preskocena' }"
+  "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest '%RAW_URL%/SlavonskaRavnica.ps1' -OutFile '%INSTALL_DIR%\SlavonskaRavnica.ps1' -Headers @{'User-Agent'='SRManager'}; Write-Host '  OK' } catch { Write-Host '  GRESKA:' $_.Exception.Message; exit 1 }"
+
+echo  [4/6] Skidam pomocne datoteke...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ProgressPreference='SilentlyContinue'; $base='%RAW_URL%'; $dir='%INSTALL_DIR%'; $h=@{'User-Agent'='SRManager'}; foreach($f in @('sr_shared_config.json','SR Manager.bat','SR Manager.vbs')) { try { Invoke-WebRequest \"$base/$f\" -OutFile \"$dir\$f\" -Headers $h } catch {} }; Write-Host '  OK'"
+
+:: Download icon (from repo raw content)
+echo  [5/6] Skidam ikonu...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest '%RAW_URL%/sr_logo.ico' -OutFile '%INSTALL_DIR%\%ICO_NAME%'; Invoke-WebRequest '%RAW_URL%/sr_logo.png' -OutFile '%INSTALL_DIR%\sr_logo.png' } catch {}; Write-Host '  OK'"
 
 :: ── Ask about desktop shortcut ──
-echo  [4/4] Desktop shortcut
+echo  [6/6] Desktop shortcut
 echo.
 set /p "MAKE_SHORTCUT=  Zelis li kreirati Desktop ikonu? (D/N): "
 
