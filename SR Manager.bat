@@ -1,2 +1,6 @@
 @echo off
-powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0SlavonskaRavnica.ps1"
+if exist "%~dp0SRManager.exe" (
+    start "" "%~dp0SRManager.exe"
+) else (
+    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0SlavonskaRavnica.ps1"
+)

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>SRManager</AssemblyName>
+    <RootNamespace>SRManager</RootNamespace>
+    <ApplicationIcon>..\..\sr_logo.ico</ApplicationIcon>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\sr_shared_config.json" Link="sr_shared_config.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\sr_logo.ico" Link="sr_logo.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\sr_logo.png" Link="sr_logo.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

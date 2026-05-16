@@ -1,6 +1,6 @@
 # ============================================================
-#  SR Manager - GUI Installer v2
-#  Skida pojedinacne fajlove (bez ZIP-a) - AV friendly
+#  SR Manager - GUI Installer v3
+#  Skida C# single-file exe i konfiguraciju - AV friendly
 # ============================================================
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
@@ -9,11 +9,10 @@ Add-Type -AssemblyName WindowsBase
 $script:InstallDir = Join-Path $env:USERPROFILE "SR Manager"
 $script:BotUrl     = "https://server-bot-production-a3a0.up.railway.app"
 $script:BaseUrl    = "https://raw.githubusercontent.com/7oncha/SRManager-Installer/master"
+$script:ReleaseUrl = "https://github.com/7oncha/SRManager-Installer/releases/latest/download"
 $script:Files = @(
-    @{ name = "SlavonskaRavnica.ps1"; url = "$($script:BotUrl)/launcher/script"; fallback = "$($script:BaseUrl)/SlavonskaRavnica.ps1" },
+    @{ name = "SRManager.exe";       url = "$($script:ReleaseUrl)/SRManager.exe" },
     @{ name = "sr_shared_config.json"; url = "$($script:BotUrl)/launcher/config"; fallback = "$($script:BaseUrl)/sr_shared_config.json" },
-    @{ name = "SR Manager.vbs";      url = "$($script:BaseUrl)/SR%20Manager.vbs" },
-    @{ name = "SR Manager.bat";      url = "$($script:BaseUrl)/SR%20Manager.bat" },
     @{ name = "sr_logo.ico";         url = "$($script:BaseUrl)/sr_logo.ico" },
     @{ name = "sr_logo.png";         url = "$($script:BaseUrl)/sr_logo.png" }
 )
@@ -222,9 +221,9 @@ function Set-Progress {
 
 $btnInstall.Add_Click({
     # If install is done, launch app
-    if ($script:InstallDone) {
-        $vbs = Join-Path $script:InstallDir "SR Manager.vbs"
-        if (Test-Path $vbs) { Start-Process "wscript.exe" -ArgumentList "`"$vbs`"" -WorkingDirectory $script:InstallDir }
+    if ($script:InstallDone -or $btnInstall.Content -eq "Pokreni SR Manager") {
+        $exe = Join-Path $script:InstallDir "SRManager.exe"
+        if (Test-Path $exe) { Start-Process $exe -WorkingDirectory $script:InstallDir }
         $window.Close()
         return
     }
@@ -305,8 +304,8 @@ $btnInstall.Add_Click({
             $ws = New-Object -ComObject WScript.Shell
             $desktop = [Environment]::GetFolderPath('Desktop')
             $shortcut = $ws.CreateShortcut((Join-Path $desktop 'SR Manager.lnk'))
-            $shortcut.TargetPath = 'wscript.exe'
-            $shortcut.Arguments = "`"$(Join-Path $installDir 'SR Manager.vbs')`""
+            $shortcut.TargetPath = Join-Path $installDir 'SRManager.exe'
+            $shortcut.Arguments = ""
             $shortcut.WorkingDirectory = $installDir
             $shortcut.Description = 'Slavonska Ravnica - SR Manager'
             $logo = Join-Path $installDir 'sr_logo.ico'
@@ -322,6 +321,7 @@ $btnInstall.Add_Click({
                 $panelProgress.Visibility = 'Collapsed'
                 $panelDone.Visibility = 'Visible'
                 $btnInstall.Content = "Pokreni SR Manager"
+                $script:InstallDone = $true
                 $btnInstall.IsEnabled = $true
                 $btnCancel.Content = "Zatvori"
                 $btnCancel.Visibility = 'Visible'

@@ -1,0 +1,22 @@
+<Window x:Class="SRManager.LicenseWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SR Manager - Licenca" Width="460" Height="330"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="#0E0E0E" Foreground="#EEEEEE">
+    <Border Margin="18" Background="#161616" CornerRadius="14" Padding="22">
+        <StackPanel>
+            <TextBlock Text="Aktivacija licence" Foreground="{StaticResource AccentBrush}" FontSize="24" FontWeight="Bold"/>
+            <TextBlock Text="Unesi svoj SR Manager licencni kljuc za nastavak." Foreground="{StaticResource MutedBrush}"
+                       TextWrapping="Wrap" Margin="0,8,0,16"/>
+            <TextBlock x:Name="txtError" Foreground="#FF6B6B" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <PasswordBox x:Name="txtKey" MinWidth="360"/>
+            <TextBlock x:Name="txtInfo" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="4,10,4,10"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Trial" Click="TrialClick"/>
+                <Button Content="Aktiviraj" Click="ActivateClick"/>
+                <Button Content="Odustani" Background="#333333" Foreground="#EEEEEE" Click="CancelClick"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

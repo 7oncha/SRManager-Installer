@@ -40,11 +40,11 @@
 
 ## Auto-Update
 
-Nakon instalacije, aplikacija se **sama azurira**:
+Nakon instalacije, C# aplikacija se **sama azurira**:
 
-1. Launcher pri pokretanju provjerava ima li nova verzija na GitHubu
+1. Launcher pri pokretanju provjerava ima li nova verzija kroz bot endpoint i GitHub Releases fallback
 2. Ako ima, pojavi se zeleni banner **"Nova verzija dostupna!"**
-3. Kliknes **"Azuriraj"** → skine se nova verzija, zamijeni stara i restarta app
+3. Kliknes **"Azuriraj"** → skine se novi `SRManager.exe`, zamijeni stari i restarta app
 4. Ne treba ponovo pokretati installer
 
 ## Screenshots
@@ -58,12 +58,26 @@ Nakon instalacije, aplikacija se **sama azurira**:
 
 ## Tehnicke Informacije
 
-- Native Windows WPF aplikacija (.NET 8, C#)
+- Native Windows WPF aplikacija (.NET 8, C#) u `src/SRManager`
 - Single-file self-contained .exe (~155 MB)
 - Ne zahtijeva nikakav runtime, PowerShell ni dodatne instalacije
 - Nema AV false positive-a
 - Taman tema sa zlatnim akcentom (#F5C518)
 - Minimalna velicina: 850x620 px, resizable
+
+### Build
+
+```powershell
+dotnet publish .\src\SRManager\SRManager.csproj -c Release -r win-x64 --self-contained true
+```
+
+Release artefakt je:
+
+```text
+src\SRManager\bin\Release\net8.0-windows\win-x64\publish\SRManager.exe
+```
+
+Stari PowerShell launcher (`SlavonskaRavnica.ps1`) ostaje u repozitoriju kao migracijski fallback za postojece instalacije, ali novi installer i shortcut ciljaju C# `SRManager.exe`.
 
 ## Kontakt
 

@@ -1,0 +1,164 @@
+<Window x:Class="SRManager.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SR Manager" Width="1040" Height="700" MinWidth="940" MinHeight="640"
+        WindowStartupLocation="CenterScreen" Background="#0E0E0E" Foreground="#EEEEEE">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="64"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="32"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#151515" BorderBrush="#252525" BorderThickness="0,0,0,1">
+            <Grid Margin="18,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="SR Manager" Foreground="{StaticResource AccentBrush}" FontSize="24" FontWeight="Bold"/>
+                    <TextBlock Text="Slavonska Ravnica - Farming Simulator 25 Launcher" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ComboBox x:Name="cmbServer" Width="240" DisplayMemberPath="Name" SelectionChanged="ServerSelectionChanged"/>
+                    <Button x:Name="btnUpdate" Content="Azuriraj" Visibility="Collapsed" Click="UpdateClick"/>
+                    <Button Content="Web" Click="OpenWebClick"/>
+                    <Button Content="Discord" Click="OpenDiscordClick"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <TabControl Grid.Row="1" x:Name="tabs" Background="#0E0E0E" BorderThickness="0" Foreground="#EEEEEE">
+            <TabItem Header="Dashboard">
+                <Grid Margin="18">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <UniformGrid Columns="4" Rows="1">
+                        <Border Background="{StaticResource PanelBrush}" Padding="18" Margin="0,0,10,12" CornerRadius="12">
+                            <StackPanel>
+                                <TextBlock Text="Status" Foreground="{StaticResource MutedBrush}"/>
+                                <TextBlock x:Name="txtStatus" Text="Ucitavam..." FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource PanelBrush}" Padding="18" Margin="0,0,10,12" CornerRadius="12">
+                            <StackPanel>
+                                <TextBlock Text="Mapa" Foreground="{StaticResource MutedBrush}"/>
+                                <TextBlock x:Name="txtMap" Text="-" FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource PanelBrush}" Padding="18" Margin="0,0,10,12" CornerRadius="12">
+                            <StackPanel>
+                                <TextBlock Text="Igraci" Foreground="{StaticResource MutedBrush}"/>
+                                <TextBlock x:Name="txtPlayers" Text="-/-" FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource PanelBrush}" Padding="18" Margin="0,0,0,12" CornerRadius="12">
+                            <StackPanel>
+                                <TextBlock Text="Modovi" Foreground="{StaticResource MutedBrush}"/>
+                                <TextBlock x:Name="txtModSummary" Text="-" FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="2*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Background="{StaticResource PanelBrush}" Padding="18" CornerRadius="12" Margin="0,0,12,0">
+                            <StackPanel>
+                                <TextBlock Text="Brze akcije" Foreground="{StaticResource AccentBrush}" FontSize="18" FontWeight="Bold"/>
+                                <TextBlock x:Name="txtProgress" Text="" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,16"/>
+                                <WrapPanel>
+                                    <Button Content="Udi na server" Click="JoinClick"/>
+                                    <Button Content="Osvjezi status" Click="RefreshStatusClick"/>
+                                    <Button Content="Provjeri modove" Click="RefreshModsClick"/>
+                                    <Button Content="Skini modove" Click="DownloadModsClick"/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="1" Background="{StaticResource PanelBrush}" Padding="18" CornerRadius="12">
+                            <StackPanel>
+                                <TextBlock Text="Online igraci" Foreground="{StaticResource AccentBrush}" FontSize="18" FontWeight="Bold"/>
+                                <ListBox x:Name="lstPlayers" Background="#101010" Foreground="#EEEEEE" BorderThickness="0" Margin="0,12,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <TextBlock Grid.Row="2" x:Name="txtFooterHint" Foreground="{StaticResource MutedBrush}" Margin="0,12,0,0"/>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Modovi">
+                <Grid Margin="18">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <Button Content="Osvjezi listu" Click="RefreshModsClick"/>
+                        <Button Content="Skini sve sto fali" Click="DownloadModsClick"/>
+                        <Button Content="Otvori mods folder" Click="OpenModsFolderClick"/>
+                    </StackPanel>
+                    <DataGrid Grid.Row="1" x:Name="dgMods" AutoGenerateColumns="False" IsReadOnly="True"
+                              Background="#101010" Foreground="#EEEEEE" BorderBrush="#333333"
+                              GridLinesVisibility="Horizontal" HeadersVisibility="Column">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="110"/>
+                            <DataGridTextColumn Header="Mod" Binding="{Binding Name}" Width="*"/>
+                            <DataGridTextColumn Header="Lokalno" Binding="{Binding Local}" Width="100"/>
+                            <DataGridTextColumn Header="Server" Binding="{Binding Server}" Width="140"/>
+                            <DataGridTextColumn Header="Velicina" Binding="{Binding Size}" Width="110"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Postavke">
+                <ScrollViewer Margin="18">
+                    <StackPanel>
+                        <TextBlock Text="Putanje" Foreground="{StaticResource AccentBrush}" FontSize="18" FontWeight="Bold" Margin="0,0,0,8"/>
+                        <TextBlock Text="FS25 exe" Foreground="{StaticResource MutedBrush}"/>
+                        <DockPanel>
+                            <TextBox x:Name="txtGamePath" DockPanel.Dock="Left" MinWidth="650"/>
+                            <Button Content="Odaberi" Click="BrowseGameClick"/>
+                        </DockPanel>
+                        <TextBlock Text="Mods folder" Foreground="{StaticResource MutedBrush}" Margin="0,12,0,0"/>
+                        <DockPanel>
+                            <TextBox x:Name="txtModsPath" DockPanel.Dock="Left" MinWidth="650"/>
+                            <Button Content="Odaberi" Click="BrowseModsClick"/>
+                        </DockPanel>
+                        <TextBlock Text="Igra" Foreground="{StaticResource AccentBrush}" FontSize="18" FontWeight="Bold" Margin="0,24,0,8"/>
+                        <CheckBox x:Name="chkIntro" Content="Intro scene ukljucene" Foreground="#EEEEEE" Margin="4"/>
+                        <CheckBox x:Name="chkDev" Content="Developer console" Foreground="#EEEEEE" Margin="4"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                            <Button Content="Spremi postavke" Click="SaveSettingsClick"/>
+                            <Button Content="Auto-detektiraj" Click="DetectPathsClick"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Log">
+                <Grid Margin="18">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBox x:Name="txtLog" FontFamily="Consolas" IsReadOnly="True" TextWrapping="Wrap"
+                             AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Background="#101010"
+                             Foreground="#EEEEEE"/>
+                    <Button Grid.Row="1" Content="Ocisti log" HorizontalAlignment="Left" Click="ClearLogClick"/>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <Border Grid.Row="2" Background="#151515" BorderBrush="#252525" BorderThickness="0,1,0,0">
+            <TextBlock x:Name="txtStatusBar" Text="Spremno" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="18,0"/>
+        </Border>
+    </Grid>
+</Window>

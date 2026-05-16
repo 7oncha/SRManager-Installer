@@ -11,7 +11,7 @@ set "RELEASE_URL=https://github.com/7oncha/SRManager-Installer/releases/latest/d
 echo.
 echo  ========================================================
 echo     Slavonska Ravnica - SR Manager
-echo     Installer v2.0
+echo     Installer v3.0 C#/.NET
 echo  ========================================================
 echo.
 
@@ -35,32 +35,23 @@ echo.
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
 :: Skidam datoteke koristeci certutil (ugraden u Windows, nema AV problema)
-echo  [1/5] Skidam SRManager.exe...
+echo  [1/4] Skidam SRManager.exe...
 certutil -urlcache -split -f "%RELEASE_URL%/SRManager.exe" "%INSTALL_DIR%\SRManager.exe" >nul 2>&1
 if exist "%INSTALL_DIR%\SRManager.exe" (echo    OK) else (echo    GRESKA - provjeri internet & pause & exit /b 1)
 
-echo  [2/5] Skidam launcher skriptu...
-certutil -urlcache -split -f "%BOT_URL%/launcher/script" "%INSTALL_DIR%\SlavonskaRavnica.ps1" >nul 2>&1
-if not exist "%INSTALL_DIR%\SlavonskaRavnica.ps1" (
-    certutil -urlcache -split -f "%RAW_URL%/SlavonskaRavnica.ps1" "%INSTALL_DIR%\SlavonskaRavnica.ps1" >nul 2>&1
-)
-if exist "%INSTALL_DIR%\SlavonskaRavnica.ps1" (echo    OK) else (echo    GRESKA & pause & exit /b 1)
-
-echo  [3/5] Skidam konfiguraciju...
+echo  [2/4] Skidam konfiguraciju...
 certutil -urlcache -split -f "%BOT_URL%/launcher/config" "%INSTALL_DIR%\sr_shared_config.json" >nul 2>&1
 if not exist "%INSTALL_DIR%\sr_shared_config.json" (
     certutil -urlcache -split -f "%RAW_URL%/sr_shared_config.json" "%INSTALL_DIR%\sr_shared_config.json" >nul 2>&1
 )
-certutil -urlcache -split -f "%RAW_URL%/SR%%20Manager.bat" "%INSTALL_DIR%\SR Manager.bat" >nul 2>&1
-certutil -urlcache -split -f "%RAW_URL%/SR%%20Manager.vbs" "%INSTALL_DIR%\SR Manager.vbs" >nul 2>&1
 echo    OK
 
-echo  [4/5] Skidam ikone...
+echo  [3/4] Skidam ikone...
 certutil -urlcache -split -f "%RAW_URL%/sr_logo.ico" "%INSTALL_DIR%\sr_logo.ico" >nul 2>&1
 certutil -urlcache -split -f "%RAW_URL%/sr_logo.png" "%INSTALL_DIR%\sr_logo.png" >nul 2>&1
 echo    OK
 
-echo  [5/5] Kreiram Desktop shortcut...
+echo  [4/4] Kreiram Desktop shortcut...
 set "DESKTOP=%USERPROFILE%\Desktop"
 set "SHORTCUT=%DESKTOP%\SR Manager.lnk"
 :: Kreiraj shortcut koristeci mshta (bez PowerShella)
