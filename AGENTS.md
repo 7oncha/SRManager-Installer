@@ -1,5 +1,12 @@
 # SR Manager - Agent Instructions
 
+## Jezik i stil koda
+
+- **Komunikacija s korisnikom:** na **hrvatskom** jeziku
+- **Kod i nazivi varijabli/funkcija:** na **engleskom**
+- **Komentari u kodu:** na **hrvatskom**
+- **Commit poruke i PR opisi:** na **engleskom** (GitHub standard)
+
 ## Cursor Cloud specific instructions
 
 ### Project overview
@@ -68,3 +75,58 @@ The app depends on external services (game server XML API, license API on Railwa
 - There are no automated tests in this repo. Validation is limited to syntax parsing and manual testing of utility functions.
 - The `.gitignore` excludes `*.exe` — the compiled .NET 8 WPF application (`SRManager.exe`) is distributed via GitHub Releases, not tracked in this repo.
 - `$script:LicenseRepoOwner`, `$script:LicenseRepoName`, `$script:LicenseFile`, `$script:LicenseBranch` constants in the script reference a `licenses.json` file on GitHub but are **unused** — actual licensing is fully via the HTTP API.
+
+---
+
+## Kontekst povezanih repozitorija
+
+### ktomasic66-coder/FS-web (Community website + Discord bot)
+
+**Stack:** Node.js, Express 5, EJS, Discord.js 14, MongoDB, MySQL (optional), Passport-Discord OAuth
+
+**Što radi:**
+- Community web stranica s Discord OAuth loginom
+- Discord bot (gallery, role sync, log channels)
+- Dashboard: statistike, "Moja Farma", galerija, pravila, novosti
+- Admin panel za upravljanje contentom
+- Money transfer API između igrača (`/api/money-transfer`)
+
+**Ključne datoteke:**
+- `server.js` — sav backend + bot logic (~3400 linija)
+- `player.js` — player count iz game servera (XML/Steam query)
+- `views/*.ejs` — frontend stranice
+- `public/` — statički resursi
+
+**Važno:**
+- Koristi **isti MongoDB** kao Farmbuddy bot (dijele kolekcije: `player_links`, `farms`, `players`, `fields`, `vehicles`, `silos`, `productions`, `animals`, `server_info`)
+- **NE implementira** `/api/license/*` ni `/api/mods/*` — to je Farmbuddy bot API (zasebni codebase, deployan na Railway)
+- Auth je Discord OAuth + session cookie, **ne** Bearer token
+- Env varijable: `PORT`, `SESSION_SECRET`, `CLIENT_ID`, `CLIENT_SECRET`, `CALLBACK_URL`, `DISCORD_BOT_TOKEN`, `GUILD_ID`, `MONGO_URI`, `MONGO_URL`, `MYSQL_URL` (optional)
+
+### ktomasic66-coder/slavonska-ravnica (Landing page)
+
+**Stack:** Next.js 16, React 19, Tailwind CSS 4, TypeScript
+
+**Što radi:**
+- Jednostavna marketing/landing stranica za community
+- Jedna stranica (`app/page.tsx`) — hero, "O Serveru", "Natjecateljski Model"
+- **Nema API-ja**, nema backenda, nema baze
+
+**Napomena:** `public/logo.png` je referenciran u kodu ali **nije** committan u repo — slike će biti broken bez tog filea.
+
+### Farmbuddy Bot API (Railway deployment)
+
+**URL:** `https://server-bot-production-a3a0.up.railway.app`
+**Codebase:** Privatni/nedostupni repo (možda `ktomasic66-coder/Server-Bot` — treba pristup)
+
+**API endpointi koje launcher koristi:**
+- `POST /api/license/activate` — aktivacija licence (key + HWID)
+- `POST /api/license/heartbeat` — heartbeat za aktivnu sesiju
+- `POST /api/license/session-end` — kraj sesije
+- `POST /api/license/trial` — trial licence
+- `GET /api/mods/manifest?server=<id>` — lista modova s SHA-256 hashevima
+- `GET /api/mods/changes-since?server=<id>&since=<date>` — promjene modova
+
+**Auth:** Bearer token iz `sr_shared_config.json` → `licenseApi.token`
+
+**Trenutni status:** Mod endpointi vraćaju HTTP 401 — token je vjerojatno istekao/promijenjen.
