@@ -79,6 +79,14 @@ src\SRManager\bin\Release\net8.0-windows\win-x64\publish\SRManager.exe
 
 Stari PowerShell launcher (`SlavonskaRavnica.ps1`) ostaje u repozitoriju kao migracijski fallback za postojece instalacije, ali novi installer i shortcut ciljaju C# `SRManager.exe`.
 
+Za lokalni publish mozes koristiti i helper skriptu:
+
+```powershell
+.\scripts\publish-srmanager.ps1
+```
+
+GitHub Actions workflow `.github/workflows/srmanager-dotnet.yml` builda launcher na PR/push, a kod objave GitHub Release-a automatski upload-a `SRManager.exe` release asset koji installer skida.
+
 ## Kontakt
 
 - **Discord:** [Slavonska Ravnica](https://discord.gg/slavonskaravnica)

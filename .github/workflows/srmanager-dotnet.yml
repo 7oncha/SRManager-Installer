@@ -1,0 +1,58 @@
+name: SR Manager .NET
+
+on:
+  pull_request:
+    paths:
+      - "src/SRManager/**"
+      - ".github/workflows/srmanager-dotnet.yml"
+  push:
+    branches:
+      - master
+      - "cursor/**"
+    paths:
+      - "src/SRManager/**"
+      - ".github/workflows/srmanager-dotnet.yml"
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows launcher
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore src/SRManager/SRManager.csproj
+
+      - name: Build
+        run: dotnet build src/SRManager/SRManager.csproj -c Release --no-restore
+
+      - name: Publish single-file launcher
+        run: dotnet publish src/SRManager/SRManager.csproj -c Release -r win-x64 --self-contained true --no-build -o artifacts/SRManager
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SRManager-win-x64
+          path: artifacts/SRManager/SRManager.exe
+          if-no-files-found: error
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload $env:RELEASE_TAG artifacts/SRManager/SRManager.exe --clobber

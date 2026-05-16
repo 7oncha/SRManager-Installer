@@ -49,6 +49,7 @@ This repo is part of a multi-repo ecosystem:
 |------|---------|
 | Build C# launcher | `dotnet build src/SRManager/SRManager.csproj -c Release` |
 | Publish C# launcher | `dotnet publish src/SRManager/SRManager.csproj -c Release -r win-x64 --self-contained true` |
+| Publish via helper script | `pwsh scripts/publish-srmanager.ps1` |
 | Syntax-check a script | `pwsh -NoProfile -Command '[System.Management.Automation.Language.Parser]::ParseFile("SlavonskaRavnica.ps1", [ref]$null, [ref]$errors); if ($errors.Count -eq 0) { "OK" } else { $errors }'` |
 | Validate JSON config | `pwsh -NoProfile -Command 'Get-Content sr_shared_config.json -Raw \| ConvertFrom-Json'` |
 | Query game server | `pwsh -NoProfile -Command '$c=(Get-Content sr_shared_config.json -Raw \| ConvertFrom-Json).servers[0]; (Invoke-WebRequest "http://$($c.ip):$($c.webPort)/feed/dedicated-server-stats.xml?code=$($c.statsCode)" -UseBasicParsing -TimeoutSec 10).Content'` |
@@ -102,6 +103,7 @@ The app depends on external services (game server XML API, license API on Railwa
 - PowerShell launcher ostaje u repozitoriju kao fallback dok se C# release artefakt ne objavi i dok postojece instalacije ne migriraju.
 - Portani su kljucni servisi: config sync, license activate/heartbeat/session-end, server status XML, bot mod manifest + `mods.html` fallback, SHA-256 mod compare, mod download, `gameSettings.xml`, FS25 launch i exe self-update.
 - UI u C# portu pokriva Dashboard/Modovi/Postavke/Log i licencni modal, ali nije jos 1:1 vizualna kopija cijelog starog PowerShell XAML-a.
+- `.github/workflows/srmanager-dotnet.yml` builda C# launcher na PR/push i kod GitHub Release publish eventa upload-a `SRManager.exe` asset. Installer ocekuje asset tocno pod tim imenom.
 
 ---
 

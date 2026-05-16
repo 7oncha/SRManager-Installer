@@ -2,3 +2,4 @@ SRManager.exe
 *.exe
 bin/
 obj/
+artifacts/
