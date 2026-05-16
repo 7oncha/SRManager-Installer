@@ -11,7 +11,7 @@
 
 ### Project overview
 
-SR Manager is a **Windows-only PowerShell/WPF GUI application** — a launcher/manager for the "Slavonska Ravnica" Farming Simulator 25 community. The main application is a single PowerShell script (`SlavonskaRavnica.ps1`, ~5600 lines, 59 functions) with no package manager, no build system, and no test framework.
+SR Manager is being migrated from a **Windows-only PowerShell/WPF GUI application** to a **Windows-only C#/.NET 8 WPF application** — a launcher/manager for the "Slavonska Ravnica" Farming Simulator 25 community. The legacy main application is a single PowerShell script (`SlavonskaRavnica.ps1`, ~5600 lines, 59 functions). The new C# project lives in `src/SRManager`.
 
 ### Ecosystem — related repositories
 
@@ -38,21 +38,25 @@ This repo is part of a multi-repo ecosystem:
 
 ### Development on Linux (Cloud Agent environment)
 
-- The full GUI **cannot run on Linux** — it requires Windows PowerShell 5.1+, WPF (PresentationFramework), Win32 P/Invoke (`user32.dll`, `kernel32.dll`, `shell32.dll`), WMI, Windows Registry, and DPAPI.
-- **PowerShell Core (`pwsh`)** is installed on the VM and can parse/syntax-check all `.ps1` scripts using the AST parser.
+- The full GUI **cannot run on Linux** — it requires Windows WPF, Windows Registry/DPAPI, and FS25-specific Windows paths.
+- **PowerShell Core (`pwsh`)** may not be installed on every Cloud Agent image. If present, it can parse/syntax-check all `.ps1` scripts using the AST parser.
+- **.NET SDK may not be installed** on every Cloud Agent image. If missing, a temporary SDK can be installed with `dotnet-install.sh` into `/tmp/dotnet` for validation.
 - Non-GUI utility functions (SHA256 hashing, HTTP requests, JSON parsing) can be executed via `pwsh` on Linux for validation.
 
 ### Key commands
 
 | Task | Command |
 |------|---------|
+| Build C# launcher | `dotnet build src/SRManager/SRManager.csproj -c Release` |
+| Publish C# launcher | `dotnet publish src/SRManager/SRManager.csproj -c Release -r win-x64 --self-contained true` |
 | Syntax-check a script | `pwsh -NoProfile -Command '[System.Management.Automation.Language.Parser]::ParseFile("SlavonskaRavnica.ps1", [ref]$null, [ref]$errors); if ($errors.Count -eq 0) { "OK" } else { $errors }'` |
 | Validate JSON config | `pwsh -NoProfile -Command 'Get-Content sr_shared_config.json -Raw \| ConvertFrom-Json'` |
 | Query game server | `pwsh -NoProfile -Command '$c=(Get-Content sr_shared_config.json -Raw \| ConvertFrom-Json).servers[0]; (Invoke-WebRequest "http://$($c.ip):$($c.webPort)/feed/dedicated-server-stats.xml?code=$($c.statsCode)" -UseBasicParsing -TimeoutSec 10).Content'` |
 
 ### Important files
 
-- `SlavonskaRavnica.ps1` — main application (all logic, UI, and networking)
+- `src/SRManager` — new C#/.NET 8 WPF launcher project
+- `SlavonskaRavnica.ps1` — legacy PowerShell application (all logic, UI, and networking), retained as migration fallback
 - `sr_shared_config.json` — server IPs, ports, stats codes, license API config (`licenseApi.url`, `licenseApi.token`)
 - `Install_SRManager.ps1` — GUI installer script
 - `SR Manager.bat` / `SR Manager.vbs` — launcher wrappers
@@ -70,29 +74,34 @@ The app depends on external services (game server XML API, license API on Railwa
 
 ### Auto-update flow
 
-- `Check-ForUpdate`: bot endpoint (`/launcher/latest`) → fallback GitHub Releases API
-- `Download-Update`: uvijek skida `.ps1` s GitHub raw + release assete (.exe/.zip)
+- Legacy PowerShell: `Check-ForUpdate`: bot endpoint (`/launcher/latest`) → fallback GitHub Releases API
+- Legacy PowerShell: `Download-Update`: uvijek skida `.ps1` s GitHub raw + release assete (.exe/.zip)
+- C# launcher: `UpdateService` checks bot endpoint → GitHub Releases fallback, then replaces `SRManager.exe` via a temporary `.cmd` updater.
 - Bot dinamicki dohvaca najnoviji release — ne treba rucno azurirati `latest.json`
 
 ### Installer flow
 
 - `Install_SRManager.bat` koristi `certutil` (ne PowerShell!) za download — izbjegava AV false positive
-- Skida: SRManager.exe (release) + SlavonskaRavnica.ps1 (bot `/launcher/script`) + config + ikone
-- GUI installer (`Install_SRManager.ps1`) isto radi ali koristi PowerShell WPF GUI
+- Novi installer skida: `SRManager.exe` (GitHub release) + config + ikone. Ne skida vise PowerShell `.ps1` za nove instalacije.
+- GUI installer (`Install_SRManager.ps1`) isto radi ali koristi PowerShell WPF GUI.
+- `SR Manager.bat` / `SR Manager.vbs` prvo pokrecu `SRManager.exe`; ako ne postoji, fallback je legacy `SlavonskaRavnica.ps1`.
 
 ### Gotchas
 
 - **`.gitattributes`** ima `*.ps1 -text` — CRLF se cuva u git blobovima jer `raw.githubusercontent.com` servira blob as-is. Bez toga, stari launcher pise LF fajlove koji ne rade na Windows PS 5.1.
 - The game server XML feed includes a UTF-8 BOM. Trim with `.TrimStart([char]0xFEFF)` before parsing.
-- **SRManager.exe je samo wrapper** (92 KB) koji pokrece `SlavonskaRavnica.ps1`. Bez `.ps1` datoteke, exe ne radi.
+- Legacy `SRManager.exe` bio je samo wrapper (92 KB) koji pokrece `SlavonskaRavnica.ps1`. Nakon C# migracije `SRManager.exe` treba biti full self-contained app (~155 MB) iz `src/SRManager`.
 - There are no automated tests. Validation is limited to syntax parsing.
 - `$script:LicenseRepoOwner` i ostale licence konstante su **nekorištene** — licenciranje je potpuno preko HTTP API-ja.
 - Licenca se veže na HWID (MachineGuid + CPU ID + Motherboard SN). Ako se HWID promijeni, `apiActivate` vraća `hwid_mismatch`. Rebind se može zatražiti kroz Discord admin panel.
 
-### Planirani razvoj
+### C# migracija - trenutno stanje
 
-- **C# .NET 8 WPF konverzija** — zamijeniti PowerShell skriptu kompajliranim .exe-om (nema source visibility, nema AV problema, nema CRLF/LF issue). .NET 8 je besplatan (MIT licenca).
-- Trenutni SRManager.exe (92KB wrapper) treba postati full self-contained app (~155 MB).
+- Grana `cursor/stabilize-launcher-dd43` / PR #12 dodaje prvi C#/.NET 8 WPF port u `src/SRManager`.
+- Cilj dizajna: stabilan kompajlirani `SRManager.exe` bez PowerShell source visibility, CRLF/LF problema i AV problema koje je imao skriptni launcher.
+- PowerShell launcher ostaje u repozitoriju kao fallback dok se C# release artefakt ne objavi i dok postojece instalacije ne migriraju.
+- Portani su kljucni servisi: config sync, license activate/heartbeat/session-end, server status XML, bot mod manifest + `mods.html` fallback, SHA-256 mod compare, mod download, `gameSettings.xml`, FS25 launch i exe self-update.
+- UI u C# portu pokriva Dashboard/Modovi/Postavke/Log i licencni modal, ali nije jos 1:1 vizualna kopija cijelog starog PowerShell XAML-a.
 
 ---
 
