@@ -13,7 +13,8 @@ $script:Files = @(
     @{ name = "SR Manager.vbs";      url = "$($script:BaseUrl)/SR%20Manager.vbs" },
     @{ name = "SR Manager.bat";      url = "$($script:BaseUrl)/SR%20Manager.bat" },
     @{ name = "sr_logo.ico";         url = "$($script:BaseUrl)/sr_logo.ico" },
-    @{ name = "sr_logo.png";         url = "$($script:BaseUrl)/sr_logo.png" }
+    @{ name = "sr_logo.png";         url = "$($script:BaseUrl)/sr_logo.png" },
+    @{ name = "sr_shared_config.json"; url = "$($script:BaseUrl)/sr_shared_config.json" }
 )
 
 [xml]$xaml = @"
