@@ -1,3 +1,5 @@
-*.ps1 text eol=crlf
-*.bat text eol=crlf
-*.vbs text eol=crlf
+# Windows skripte moraju imati CRLF — cuvaj ih tocno kako su upisane u repo
+# (-text = git ne konvertira line endings, raw.githubusercontent.com servira CRLF)
+*.ps1 -text
+*.bat -text
+*.vbs -text
