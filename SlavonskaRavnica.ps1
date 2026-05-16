@@ -4192,7 +4192,24 @@ function Join-Server {
         $serverStatus = Get-ServerStatus
         if ($serverStatus.online -and $serverStatus.gameVersion) {
             $localVer = ''
-            try { $localVer = (Get-Item $exePath).VersionInfo.FileVersion } catch {}
+            try {
+                $vi = (Get-Item $exePath).VersionInfo
+                # ProductVersion je tocnija verzija igre (npr. "1.18.0.0")
+                # FileVersion moze biti genericki Windows version (npr. "10.0.0.0")
+                $localVer = if ($vi.ProductVersion -and $vi.ProductVersion -ne '0.0.0.0') { $vi.ProductVersion } else { $vi.FileVersion }
+                # Ocisti trailing znakove i razmake
+                if ($localVer) { $localVer = $localVer.Trim() }
+                # Ako je jos uvijek nesto sumnjivo (npr. "10.0.0.0"), pokusaj iz gameSettings.xml
+                if (-not $localVer -or $localVer -match '^10\.' -or $localVer -eq '0.0.0.0') {
+                    $gsPath2 = Get-GameSettingsPath
+                    if (Test-Path $gsPath2) {
+                        $gsContent2 = Get-Content $gsPath2 -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                        # FS25 sprema verziju igre u gameSettings.xml
+                        if ($gsContent2 -match '<version>([^<]+)</version>') { $localVer = $Matches[1].Trim() }
+                        elseif ($gsContent2 -match '<version\s+value="([^"]+)"') { $localVer = $Matches[1].Trim() }
+                    }
+                }
+            } catch {}
             if ($localVer -and $serverStatus.gameVersion -and $localVer -ne $serverStatus.gameVersion) {
                 $r = Show-SRConfirm "Verzija igre se ne podudara!`n`nServer: $($serverStatus.gameVersion)`nTvoja:  $localVer`n`nServer ce te najvjerojatnije kickati.`nPokrenuti svejedno?" "SR Launcher" "Pokreni" "Odustani"
                 if ($r -ne 'Yes') {
@@ -4241,16 +4258,41 @@ function Join-Server {
 
     Write-Log "Pokrecem FS25 za server: $($server.name)..."
     $txtJoinStatus.Text = "Pokrecem igru..."
-    # Procitaj postavku intro scene; ako je iskljucena, dodaj -skipStartVideos
+    # Osiguraj da je isIntroActive u gameSettings.xml sinkroniziran s launcher postavkom
+    # Ovo radi i za Giants Launcher i za Steam jer se citaj iz gameSettings.xml
     $launchArgs = @()
     try {
         $gsContent = Get-Content $gsPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
         $introOff = $false
         if ($gsContent -match '<isIntroActive>([^<]*)</isIntroActive>') { if ($matches[1].Trim() -eq 'false') { $introOff = $true } }
         elseif ($gsContent -match '<isIntroActive\s+value="([^"]*)"') { if ($matches[1].Trim() -eq 'false') { $introOff = $true } }
-        if ($introOff) { $launchArgs += '-skipStartVideos'; Write-Log "Launch arg: -skipStartVideos (intro iskljucen)" }
+        if ($introOff) {
+            $launchArgs += '-skipStartVideos'
+            Write-Log "Launch arg: -skipStartVideos (intro iskljucen)"
+        }
     } catch {}
-    if ($launchArgs.Count -gt 0) {
+    # Pokreni igru — podrzava Steam i Giants Launcher
+    $isGiantsLauncher = $false
+    try {
+        # Detektiraj je li FS25 instaliran preko Giants Launchera
+        $parentDir = Split-Path $exePath -Parent
+        $giantsLauncher = Join-Path $parentDir "GiantsLauncher.exe"
+        if (-not (Test-Path $giantsLauncher)) {
+            # Giants Launcher moze biti u parent folderu
+            $giantsLauncher = Join-Path (Split-Path $parentDir -Parent) "GiantsLauncher.exe"
+        }
+        if (Test-Path $giantsLauncher) { $isGiantsLauncher = $true }
+        # Alternativna detekcija: Steam ima steam_api64.dll
+        $steamDll = Join-Path $parentDir "steam_api64.dll"
+        if (Test-Path $steamDll) { $isGiantsLauncher = $false }
+    } catch {}
+    if ($isGiantsLauncher -and $launchArgs.Count -gt 0) {
+        # Giants Launcher ignorira command line argumente
+        # Ali gameSettings.xml je vec postavljen (Write-GameSetting iznad)
+        # Pokreni igru normalno — isIntroActive u xml-u ce uciniti svoje
+        Write-Log "Giants Launcher detektiran — intro kontroliran kroz gameSettings.xml"
+        Start-Process $exePath
+    } elseif ($launchArgs.Count -gt 0) {
         Start-Process $exePath -ArgumentList $launchArgs
     } else {
         Start-Process $exePath
