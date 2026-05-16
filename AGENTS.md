@@ -68,13 +68,31 @@ The app depends on external services (game server XML API, license API on Railwa
 3. If bot manifest succeeds, mods are compared by SHA-256 hash (preferred path)
 4. If bot fails, falls back to scraping `mods.html` from game server (legacy, size-only comparison)
 
+### Auto-update flow
+
+- `Check-ForUpdate`: bot endpoint (`/launcher/latest`) → fallback GitHub Releases API
+- `Download-Update`: uvijek skida `.ps1` s GitHub raw + release assete (.exe/.zip)
+- Bot dinamicki dohvaca najnoviji release — ne treba rucno azurirati `latest.json`
+
+### Installer flow
+
+- `Install_SRManager.bat` koristi `certutil` (ne PowerShell!) za download — izbjegava AV false positive
+- Skida: SRManager.exe (release) + SlavonskaRavnica.ps1 (bot `/launcher/script`) + config + ikone
+- GUI installer (`Install_SRManager.ps1`) isto radi ali koristi PowerShell WPF GUI
+
 ### Gotchas
 
-- The game server XML feed includes a UTF-8 BOM (`\xEF\xBB\xBF`). When parsing in PowerShell Core on Linux, trim it with `.TrimStart([char]0xFEFF)` before loading as XML.
-- The bot API mod endpoints currently return **HTTP 401** with the token in `sr_shared_config.json` — the token may need rotation or the bot API auth may have changed.
-- There are no automated tests in this repo. Validation is limited to syntax parsing and manual testing of utility functions.
-- The `.gitignore` excludes `*.exe` — the compiled .NET 8 WPF application (`SRManager.exe`) is distributed via GitHub Releases, not tracked in this repo.
-- `$script:LicenseRepoOwner`, `$script:LicenseRepoName`, `$script:LicenseFile`, `$script:LicenseBranch` constants in the script reference a `licenses.json` file on GitHub but are **unused** — actual licensing is fully via the HTTP API.
+- **`.gitattributes`** ima `*.ps1 -text` — CRLF se cuva u git blobovima jer `raw.githubusercontent.com` servira blob as-is. Bez toga, stari launcher pise LF fajlove koji ne rade na Windows PS 5.1.
+- The game server XML feed includes a UTF-8 BOM. Trim with `.TrimStart([char]0xFEFF)` before parsing.
+- **SRManager.exe je samo wrapper** (92 KB) koji pokrece `SlavonskaRavnica.ps1`. Bez `.ps1` datoteke, exe ne radi.
+- There are no automated tests. Validation is limited to syntax parsing.
+- `$script:LicenseRepoOwner` i ostale licence konstante su **nekorištene** — licenciranje je potpuno preko HTTP API-ja.
+- Licenca se veže na HWID (MachineGuid + CPU ID + Motherboard SN). Ako se HWID promijeni, `apiActivate` vraća `hwid_mismatch`. Rebind se može zatražiti kroz Discord admin panel.
+
+### Planirani razvoj
+
+- **C# .NET 8 WPF konverzija** — zamijeniti PowerShell skriptu kompajliranim .exe-om (nema source visibility, nema AV problema, nema CRLF/LF issue). .NET 8 je besplatan (MIT licenca).
+- Trenutni SRManager.exe (92KB wrapper) treba postati full self-contained app (~155 MB).
 
 ---
 
