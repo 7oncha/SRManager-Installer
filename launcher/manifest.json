@@ -1,0 +1,22 @@
+﻿{
+    "version":  "2.3.0.0",
+    "installType":  "zip",
+    "features":  [
+                     "Vise FS25 servera + ping i live status",
+                     "Licenca / HWID / probna 3 dana (bot API)",
+                     "SHA-256 mod manifest i sync (server-authoritative)",
+                     "GitHub auto-update u ispravan install folder (ZIP)",
+                     "Admin mod, bot config sync, session heartbeat",
+                     "UI 2.3: farmbuddy-style dark + gold, SrCard grid, platform kartice",
+                     "Tamni scrollbar, psenica/traktor siluete, DarkCheckBox",
+                     "Multiplayer folderi (favoriti, brzi odabir pri joinu)",
+                     "Mod favoriti + SHOW filter; save wizard 7 koraka (HR)",
+                     "Postavke: Steam/Xbox/Giants, intro skip, fullscreen F11",
+                     "Fix-Desktop-Shortcut.bat u ZIP paketu"
+                 ],
+    "downloadUrl":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.3.0.0/SR_Manager.zip",
+    "instructions":  "Skini ZIP, raspakiraj u folder, pokreni Pokreni SR Manager.bat (NE SRManager.exe)",
+    "updatedAt":  "2026-05-17T11:21:19.8357752Z",
+    "downloadFile":  "SR_Manager.zip",
+    "releasePageUrl":  "https://github.com/7oncha/SRManager-Installer/releases/tag/v2.3.0.0"
+}

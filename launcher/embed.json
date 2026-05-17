@@ -1,0 +1,35 @@
+﻿{
+    "url":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.3.0.0/SR_Manager.zip",
+    "downloadUrl":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.3.0.0/SR_Manager.zip",
+    "description":  "Skini **SR_Manager.zip**, raspakiraj i pokreni **Pokreni SR Manager.bat** (ili SR Manager.vbs).\n\n**NE** pokreci SRManager.exe - to je stari installer.\n\nProblem? **TEST-POKRENI.bat**",
+    "color":  16056599,
+    "downloadFile":  "SR_Manager.zip",
+    "installType":  "zip",
+    "fields":  [
+                   {
+                       "inline":  true,
+                       "name":  "Verzija",
+                       "value":  "v2.3.0.0"
+                   },
+                   {
+                       "inline":  true,
+                       "name":  "Datoteka",
+                       "value":  "SR_Manager.zip"
+                   },
+                   {
+                       "inline":  false,
+                       "name":  "Koraci",
+                       "value":  "1. Skini ZIP\n2. Raspakiraj cijeli folder\n3. Pokreni Pokreni SR Manager.bat"
+                   },
+                   {
+                       "inline":  false,
+                       "name":  "SR Manager (vs generic hub)",
+                       "value":  "- Vise FS25 servera + ping i live status\n- Licenca / HWID / probna 3 dana (bot API)\n- SHA-256 mod manifest i sync (server-authoritative)\n- GitHub auto-update u ispravan install folder (ZIP)\n- Admin mod, bot config sync, session heartbeat\n- UI 2.3: farmbuddy-style dark + gold, SrCard grid, platform kartice\n- Tamni scrollbar, psenica/traktor siluete, DarkCheckBox\n- Multiplayer folderi (favoriti, brzi odabir pri joinu)\n- Mod favoriti + SHOW filter; save wizard 7 koraka (HR)\n- Postavke: Steam/Xbox/Giants, intro skip, fullscreen F11\n- Fix-Desktop-Shortcut.bat u ZIP paketu"
+                   }
+               ],
+    "buttonLabel":  "Skini SR Manager (ZIP)",
+    "title":  "SR Manager - Slavonska Ravnica",
+    "thumbnail":  {
+                      "url":  "https://raw.githubusercontent.com/7oncha/SRManager-Installer/master/sr_logo.png"
+                  }
+}
