@@ -7,13 +7,13 @@
                      "SHA-256 mod manifest i sync (server-authoritative)",
                      "GitHub auto-update (ZIP + SlavonskaRavnica.ps1)",
                      "Admin mod, bot config sync, session heartbeat",
-                     "UI 2.2: favoriti, PRIKAZ dropdown, save wizard skeleton, mod thumbnails",
-                     "Mod thumbnails iz ZIP (modDesc), filter po kategoriji",
-                     "Desktop shortcut -\u003e Pokreni SR Manager.bat"
+                     "UI 2.2: sidebar RADNI PROSTOR / BIBLIOTEKA / ZBIRKE",
+                     "Multiplayer folderi (JSON AppData, favoriti, join path)",
+                     "Mod thumbnails, filter, favoriti; desktop shortcut bat"
                  ],
     "downloadUrl":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.2.0.3/SR_Manager.zip",
     "instructions":  "Skini ZIP, raspakiraj u folder, pokreni Pokreni SR Manager.bat (NE SRManager.exe)",
-    "updatedAt":  "2026-05-17T10:14:59.4956424Z",
+    "updatedAt":  "2026-05-17T10:17:35.8905763Z",
     "downloadFile":  "SR_Manager.zip",
     "releasePageUrl":  "https://github.com/7oncha/SRManager-Installer/releases/tag/v2.2.0.3"
 }

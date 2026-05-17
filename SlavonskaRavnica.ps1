@@ -82,7 +82,10 @@ $script:LicenseRepoName  = "SlavonskaRavnica-apk"
 $script:LicenseFile      = "licenses.json"
 $script:LicenseBranch    = "main"
 $script:LicenseCachePath = Join-Path $env:APPDATA "SR-Launcher\license.dat"
+$script:UserSettingsPath = Join-Path $env:APPDATA "SR-Launcher\user-settings.json"
 $script:LicenseGraceHours = 24
+$script:IsFullscreen = $false
+$script:WindowRestore = $null
 
 # ============================================================
 # UTILITY FUNCTIONS
@@ -520,6 +523,280 @@ function Find-ModsPath {
         return $path
     }
     return ""
+}
+
+function Find-SavegamesPath {
+    $root = Get-FS25UserDataPath
+    if ($root) { return $root }
+    $path = Join-Path ([Environment]::GetFolderPath('MyDocuments')) "My Games\FarmingSimulator2025"
+    if (Test-Path $path) { return $path }
+    return ""
+}
+
+function Find-DlcPath {
+    param([string]$ExePath)
+    if ($ExePath -and (Test-Path $ExePath)) {
+        $data = Join-Path (Split-Path $ExePath -Parent) "data"
+        if (Test-Path $data) { return $data }
+    }
+    return ""
+}
+
+function Get-GamePlatformFromPath {
+    param([string]$ExePath)
+    if (-not $ExePath) { return 'steam' }
+    $dir = Split-Path $ExePath -Parent
+    if ($ExePath -match '\\WindowsApps\\|\\Packages\\') { return 'xbox' }
+    if (Test-Path (Join-Path $dir 'steam_api64.dll')) { return 'steam' }
+    $parent = Split-Path $dir -Parent
+    if ((Test-Path (Join-Path $dir 'GiantsLauncher.exe')) -or (Test-Path (Join-Path $parent 'GiantsLauncher.exe'))) {
+        return 'giants'
+    }
+    if ($ExePath -match 'Steam\\steamapps') { return 'steam' }
+    if ($ExePath -match 'Farming Simulator 2025') { return 'giants' }
+    return 'steam'
+}
+
+function Find-XboxFS25ExePaths {
+    $found = [System.Collections.Generic.List[string]]::new()
+    try {
+        $pkgRoot = Join-Path $env:LOCALAPPDATA 'Packages'
+        if (Test-Path $pkgRoot) {
+            Get-ChildItem $pkgRoot -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match 'FarmingSimulator|GIANTS.*Farm' } |
+                ForEach-Object {
+                    $hits = Get-ChildItem $_.FullName -Recurse -Filter 'FarmingSimulator2025.exe' -ErrorAction SilentlyContinue
+                    foreach ($h in $hits) { [void]$found.Add($h.FullName) }
+                }
+        }
+    } catch {}
+    try {
+        $winApps = "${env:ProgramFiles}\WindowsApps"
+        if (Test-Path $winApps) {
+            Get-ChildItem $winApps -Recurse -Filter 'FarmingSimulator2025.exe' -ErrorAction SilentlyContinue |
+                Select-Object -First 3 |
+                ForEach-Object { [void]$found.Add($_.FullName) }
+        }
+    } catch {}
+    return @($found | Select-Object -Unique)
+}
+
+function Find-GamePathForPlatform {
+    param([string]$Platform = 'auto')
+    $p = if ($Platform) { $Platform.ToLowerInvariant().Trim() } else { 'auto' }
+    $steam = @(
+        "${env:ProgramFiles(x86)}\Steam\steamapps\common\Farming Simulator 25\FarmingSimulator2025.exe",
+        "$env:ProgramFiles\Steam\steamapps\common\Farming Simulator 25\FarmingSimulator2025.exe",
+        "D:\SteamLibrary\steamapps\common\Farming Simulator 25\FarmingSimulator2025.exe",
+        "E:\SteamLibrary\steamapps\common\Farming Simulator 25\FarmingSimulator2025.exe"
+    )
+    $giants = @(
+        "${env:ProgramFiles(x86)}\Farming Simulator 2025\FarmingSimulator2025.exe",
+        "$env:ProgramFiles\Farming Simulator 2025\FarmingSimulator2025.exe",
+        "D:\Farming Simulator 2025\FarmingSimulator2025.exe",
+        "D:\Games\Farming Simulator 2025\FarmingSimulator2025.exe",
+        "E:\Farming Simulator 2025\FarmingSimulator2025.exe"
+    )
+    if ($p -eq 'auto') {
+        foreach ($path in ($steam + $giants + @(Find-XboxFS25ExePaths))) {
+            if ($path -and (Test-Path $path)) { return $path }
+        }
+        return Find-GamePath
+    }
+    $list = switch ($p) {
+        'steam'  { $steam }
+        'giants' { $giants }
+        'xbox'   { @(Find-XboxFS25ExePaths) }
+        default  { @() }
+    }
+    foreach ($path in $list) {
+        if ($path -and (Test-Path $path)) { return $path }
+    }
+    if ($p -eq 'giants') {
+        try {
+            $reg = Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+                Where-Object { $_.DisplayName -like "*Farming Simulator 2025*" -or $_.DisplayName -like "*Farming Simulator 25*" } |
+                Select-Object -First 1
+            if ($reg -and $reg.InstallLocation) {
+                $exe = Join-Path $reg.InstallLocation "FarmingSimulator2025.exe"
+                if (Test-Path $exe) { return $exe }
+            }
+        } catch {}
+    }
+    return ""
+}
+
+function Get-SelectedGamePlatform {
+    if ($platformSteam -and $platformSteam.IsChecked) { return 'steam' }
+    if ($platformGiants -and $platformGiants.IsChecked) { return 'giants' }
+    if ($platformXbox -and $platformXbox.IsChecked) { return 'xbox' }
+    if ($script:Config.gamePlatform) { return [string]$script:Config.gamePlatform }
+    return 'steam'
+}
+
+function Set-PlatformRadio {
+    param([string]$Platform)
+    $p = if ($Platform) { $Platform.ToLowerInvariant().Trim() } else { 'steam' }
+    if ($platformSteam)  { $platformSteam.IsChecked  = ($p -eq 'steam') }
+    if ($platformGiants) { $platformGiants.IsChecked = ($p -eq 'giants') }
+    if ($platformXbox)   { $platformXbox.IsChecked   = ($p -eq 'xbox') }
+}
+
+function Get-GameLaunchArgs {
+    $args = [System.Collections.Generic.List[string]]::new()
+    $skipIntro = $true
+    try {
+        if ($null -ne $script:Config.launchSkipIntro) { $skipIntro = [bool]$script:Config.launchSkipIntro }
+        elseif ($chkLaunchSkipIntro) { $skipIntro = [bool]$chkLaunchSkipIntro.IsChecked }
+        else {
+            $gs = Read-GameSettings
+            $skipIntro = -not [bool]$gs.introScene
+        }
+    } catch {}
+    if ($skipIntro) { [void]$args.Add('-skipStartVideos') }
+
+    $cheats = $false
+    try {
+        if ($null -ne $script:Config.launchCheats) { $cheats = [bool]$script:Config.launchCheats }
+        elseif ($chkLaunchCheats) { $cheats = [bool]$chkLaunchCheats.IsChecked }
+    } catch {}
+    if ($cheats) { [void]$args.Add('-cheats') }
+    return @($args.ToArray())
+}
+
+function Start-FS25Game {
+    param(
+        [Parameter(Mandatory)][string]$ExePath,
+        [string[]]$ExtraArgs = @()
+    )
+    if (-not (Test-Path $ExePath)) {
+        throw "Exe ne postoji: $ExePath"
+    }
+    $gameDir = Split-Path $ExePath -Parent
+    $launchArgs = [System.Collections.Generic.List[string]]::new()
+    foreach ($a in (Get-GameLaunchArgs + $ExtraArgs)) {
+        if ($a -and ($launchArgs -notcontains $a)) { [void]$launchArgs.Add($a) }
+    }
+    if ($launchArgs -contains '-skipStartVideos') {
+        Write-GameSetting 'isIntroActive' 'false' | Out-Null
+    }
+    $argLine = if ($launchArgs.Count -gt 0) { $launchArgs -join ' ' } else { '(none)' }
+    Write-Log "Start-FS25: $ExePath | cwd=$gameDir | args=$argLine | platform=$(Get-GamePlatformFromPath $ExePath)"
+    $procArgs = @{
+        FilePath         = $ExePath
+        WorkingDirectory = $gameDir
+    }
+    if ($launchArgs.Count -gt 0) { $procArgs['ArgumentList'] = @($launchArgs.ToArray()) }
+    Start-Process @procArgs
+}
+
+function Merge-UserGameSettings {
+    param($Config)
+    if (-not (Test-Path $script:UserSettingsPath)) { return $Config }
+    try {
+        $u = Get-Content $script:UserSettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($name in @(
+            'gamePlatform','gamePath','modsPath','savegamesPath','dlcPath',
+            'launchCheats','launchSkipIntro','windowFullscreen','windowMaximize'
+        )) {
+            if ($u.PSObject.Properties.Name -contains $name -and $null -ne $u.$name -and "$($u.$name)" -ne '') {
+                $Config | Add-Member -NotePropertyName $name -NotePropertyValue $u.$name -Force
+            }
+        }
+    } catch {
+        Write-Log "WARN user-settings.json: $($_.Exception.Message)"
+    }
+    return $Config
+}
+
+function Save-UserGameSettings {
+    $dir = Split-Path $script:UserSettingsPath -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $obj = [ordered]@{
+        gamePlatform    = if ($script:Config.gamePlatform) { [string]$script:Config.gamePlatform } else { 'steam' }
+        gamePath        = if ($script:Config.gamePath) { [string]$script:Config.gamePath } else { '' }
+        modsPath        = if ($script:Config.modsPath) { [string]$script:Config.modsPath } else { '' }
+        savegamesPath   = if ($script:Config.savegamesPath) { [string]$script:Config.savegamesPath } else { '' }
+        dlcPath         = if ($script:Config.dlcPath) { [string]$script:Config.dlcPath } else { '' }
+        launchCheats    = [bool]$script:Config.launchCheats
+        launchSkipIntro = [bool]$script:Config.launchSkipIntro
+        windowFullscreen= [bool]$script:Config.windowFullscreen
+        windowMaximize  = [bool]$script:Config.windowMaximize
+        savedAt         = (Get-Date).ToUniversalTime().ToString('o')
+    }
+    ($obj | ConvertTo-Json -Depth 3) | Set-Content $script:UserSettingsPath -Encoding UTF8
+}
+
+function Sync-GameLaunchUiFromConfig {
+    if ($txtGameExe -and $script:Config.gamePath) { $txtGameExe.Text = [string]$script:Config.gamePath }
+    if ($txtModsPath -and $script:Config.modsPath) { $txtModsPath.Text = [string]$script:Config.modsPath }
+    if ($txtSavegamesPath -and $script:Config.savegamesPath) { $txtSavegamesPath.Text = [string]$script:Config.savegamesPath }
+    if ($txtDlcPath -and $script:Config.dlcPath) { $txtDlcPath.Text = [string]$script:Config.dlcPath }
+    Set-PlatformRadio ([string]$script:Config.gamePlatform)
+    if ($chkLaunchSkipIntro -and $null -ne $script:Config.launchSkipIntro) {
+        $chkLaunchSkipIntro.IsChecked = [bool]$script:Config.launchSkipIntro
+    }
+    if ($chkLaunchCheats -and $null -ne $script:Config.launchCheats) {
+        $chkLaunchCheats.IsChecked = [bool]$script:Config.launchCheats
+    }
+    if ($chkWindowMaximize -and $null -ne $script:Config.windowMaximize) {
+        $chkWindowMaximize.IsChecked = [bool]$script:Config.windowMaximize
+    }
+}
+
+function Apply-GameLaunchDefaults {
+    if (-not $script:Config.gamePlatform -and $script:Config.gamePath) {
+        $script:Config | Add-Member -NotePropertyName gamePlatform -NotePropertyValue (Get-GamePlatformFromPath $script:Config.gamePath) -Force
+    }
+    if (-not $script:Config.PSObject.Properties['launchSkipIntro']) {
+        $script:Config | Add-Member -NotePropertyName launchSkipIntro -NotePropertyValue $true -Force
+    }
+    if (-not $script:Config.PSObject.Properties['launchCheats']) {
+        $script:Config | Add-Member -NotePropertyName launchCheats -NotePropertyValue $false -Force
+    }
+    if (-not $script:Config.savegamesPath) {
+        $sg = Find-SavegamesPath
+        if ($sg) { $script:Config | Add-Member -NotePropertyName savegamesPath -NotePropertyValue $sg -Force }
+    }
+    if (-not $script:Config.dlcPath -and $script:Config.gamePath) {
+        $dlc = Find-DlcPath -ExePath $script:Config.gamePath
+        if ($dlc) { $script:Config | Add-Member -NotePropertyName dlcPath -NotePropertyValue $dlc -Force }
+    }
+}
+
+function Set-WindowFullscreen {
+    param([bool]$On)
+    if ($On) {
+        if (-not $script:IsFullscreen) {
+            $script:WindowRestore = @{
+                Left = $window.Left; Top = $window.Top
+                Width = $window.Width; Height = $window.Height
+                WindowState = $window.WindowState
+            }
+        }
+        $window.WindowState = 'Maximized'
+        $script:IsFullscreen = $true
+        if ($btnFullscreen) { $btnFullscreen.ToolTip = 'Izlaz iz cijelog zaslona (F11)' }
+    } else {
+        $window.WindowState = 'Normal'
+        if ($script:WindowRestore) {
+            $window.Width  = $script:WindowRestore.Width
+            $window.Height = $script:WindowRestore.Height
+            $window.Left   = $script:WindowRestore.Left
+            $window.Top    = $script:WindowRestore.Top
+        }
+        $script:IsFullscreen = $false
+        if ($btnFullscreen) { $btnFullscreen.ToolTip = 'Cijeli zaslon (F11)' }
+    }
+    try {
+        $script:Config | Add-Member -NotePropertyName windowFullscreen -NotePropertyValue $script:IsFullscreen -Force
+        Save-Config
+        Save-UserGameSettings
+    } catch {}
+}
+
+function Toggle-WindowFullscreen {
+    Set-WindowFullscreen (-not $script:IsFullscreen)
 }
 
 function Test-PlaceholderGameVersion {
@@ -2245,7 +2522,7 @@ function Load-Config {
     if (Test-Path $script:ConfigPath) {
         try {
             $json = Get-Content $script:ConfigPath -Raw | ConvertFrom-Json
-            if ($json.servers) { return $json }
+            if ($json.servers) { return (Merge-UserGameSettings $json) }
         } catch {}
     }
     $config = [PSCustomObject]@{
@@ -2276,7 +2553,7 @@ function Load-Config {
         )
     }
     $config | ConvertTo-Json -Depth 5 | Set-Content $script:ConfigPath -Encoding UTF8
-    return $config
+    return (Merge-UserGameSettings $config)
 }
 
 function Save-Config {
@@ -2370,13 +2647,21 @@ function Sync-SharedConfig {
 # ============================================================
 function Initialize-LauncherConfig {
     $script:Config = Load-Config
+    Apply-GameLaunchDefaults
     if ($script:Config.githubRepo) {
         $repo = $script:Config.githubRepo -replace '^https?://github\.com/','' -replace '/$',''
         $script:GitHubRepo = $repo
     }
     if (-not $script:Config.gamePath) {
-        $detected = Find-GamePath
-        if ($detected) { $script:Config.gamePath = $detected; Save-Config }
+        $plat = if ($script:Config.gamePlatform) { $script:Config.gamePlatform } else { 'auto' }
+        $detected = Find-GamePathForPlatform -Platform $plat
+        if ($detected) {
+            $script:Config.gamePath = $detected
+            if (-not $script:Config.gamePlatform) {
+                $script:Config | Add-Member -NotePropertyName gamePlatform -NotePropertyValue (Get-GamePlatformFromPath $detected) -Force
+            }
+            Save-Config
+        }
     }
     if (-not $script:Config.modsPath) {
         $detected = Find-ModsPath
@@ -3368,6 +3653,8 @@ $script:PreloadedLocalModCount = $null
                         <TextBlock x:Name="txtStatus" Text="OFFLINE" FontSize="10"
                                    FontWeight="Bold" Foreground="#E5484D" Margin="0,0,16,0"
                                    VerticalAlignment="Center" FontFamily="Segoe UI"/>
+                        <Button x:Name="btnFullscreen" Style="{StaticResource IconBtn}" Margin="0,0,4,0"
+                                Content="&#xE740;" FontSize="12" ToolTip="Cijeli zaslon (F11)"/>
                         <Button x:Name="btnMinimize" Style="{StaticResource IconBtn}" Margin="0,0,4,0"
                                 Content="&#xE921;" FontSize="12" ToolTip="Minimiziraj"/>
                         <Button x:Name="btnClose" Style="{StaticResource IconBtn}"
@@ -4552,29 +4839,46 @@ $script:PreloadedLocalModCount = $null
                                 </StackPanel>
                             </Border>
 
-                            <!-- Player Settings -->
+                            <!-- Player / Platform Settings (FarmSim Hub style) -->
                             <Border Background="#161616" CornerRadius="10" Padding="24"
                                     Margin="0,0,0,16" BorderBrush="#222" BorderThickness="1">
                                 <StackPanel>
-                                    <TextBlock Text="Igrac" FontSize="15" FontWeight="SemiBold"
-                                               Foreground="#F5C518" Margin="0,0,0,16" FontFamily="Segoe UI"/>
+                                    <TextBlock Text="Igra i platforma" FontSize="15" FontWeight="SemiBold"
+                                               Foreground="#F5C518" Margin="0,0,0,8" FontFamily="Segoe UI"/>
+                                    <TextBlock Text="Odaberi launcher preko kojeg je FS25 instaliran"
+                                               FontSize="11" Foreground="#666" Margin="0,0,0,12" FontFamily="Segoe UI"/>
 
-                                    <TextBlock Text="FS25 Exe Path" FontSize="11"
+                                    <WrapPanel x:Name="platformPanel" Margin="0,0,0,16">
+                                        <RadioButton x:Name="platformSteam" Content="Steam" GroupName="gamePlatform"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,8,8"
+                                                     Tag="steam" IsChecked="True"/>
+                                        <RadioButton x:Name="platformGiants" Content="Giants Installer" GroupName="gamePlatform"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,8,8" Tag="giants"/>
+                                        <RadioButton x:Name="platformXbox" Content="Xbox / Game Pass" GroupName="gamePlatform"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,8,8" Tag="xbox"/>
+                                    </WrapPanel>
+
+                                    <TextBlock Text="FS25.exe (FarmingSimulator2025.exe)" FontSize="11"
                                                Foreground="#888" Margin="0,0,0,6" FontFamily="Segoe UI"/>
-                                    <Grid Margin="0,0,0,16">
+                                    <Grid Margin="0,0,0,12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <TextBox x:Name="txtGameExe" Grid.Column="0"
                                                  Style="{StaticResource ModernTextBox}"/>
                                         <Button x:Name="btnBrowseExe" Grid.Column="1" Content="..."
-                                                Style="{StaticResource BtnGhost}" Width="44" Margin="8,0,0,0"/>
+                                                Style="{StaticResource BtnGhost}" Width="44" Margin="8,0,0,0"
+                                                ToolTip="Odaberi exe"/>
+                                        <Button x:Name="btnAutoDetectGame" Grid.Column="2" Content="Auto"
+                                                Style="{StaticResource BtnGhost}" Margin="8,0,0,0" Padding="12,8"
+                                                ToolTip="Automatski pronadi igru za odabranu platformu"/>
                                     </Grid>
 
-                                    <TextBlock Text="Mods Folder" FontSize="11"
+                                    <TextBlock Text="Mods folder" FontSize="11"
                                                Foreground="#888" Margin="0,0,0,6" FontFamily="Segoe UI"/>
-                                    <Grid Margin="0,0,0,16">
+                                    <Grid Margin="0,0,0,12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
@@ -4584,6 +4888,44 @@ $script:PreloadedLocalModCount = $null
                                         <Button x:Name="btnBrowseMods" Grid.Column="1" Content="..."
                                                 Style="{StaticResource BtnGhost}" Width="44" Margin="8,0,0,0"/>
                                     </Grid>
+
+                                    <TextBlock Text="Savegames folder (My Games\FarmingSimulator2025)" FontSize="11"
+                                               Foreground="#888" Margin="0,0,0,6" FontFamily="Segoe UI"/>
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="txtSavegamesPath" Grid.Column="0"
+                                                 Style="{StaticResource ModernTextBox}"/>
+                                        <Button x:Name="btnBrowseSavegames" Grid.Column="1" Content="..."
+                                                Style="{StaticResource BtnGhost}" Width="44" Margin="8,0,0,0"/>
+                                    </Grid>
+
+                                    <TextBlock Text="DLC / data folder (opcionalno)" FontSize="11"
+                                               Foreground="#888" Margin="0,0,0,6" FontFamily="Segoe UI"/>
+                                    <Grid Margin="0,0,0,16">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="txtDlcPath" Grid.Column="0"
+                                                 Style="{StaticResource ModernTextBox}"/>
+                                        <Button x:Name="btnBrowseDlc" Grid.Column="1" Content="..."
+                                                Style="{StaticResource BtnGhost}" Width="44" Margin="8,0,0,0"/>
+                                    </Grid>
+
+                                    <TextBlock Text="Launch argumenti (Steam i Giants exe)" FontSize="11"
+                                               Foreground="#888" Margin="0,0,0,10" FontFamily="Segoe UI"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                                        <CheckBox x:Name="chkLaunchSkipIntro" Content="-skipStartVideos"
+                                                  Foreground="#ccc" FontFamily="Segoe UI" Margin="0,0,20,0"
+                                                  IsChecked="True"
+                                                  ToolTip="Preskoci intro video (preporuceno za multiplayer)"/>
+                                        <CheckBox x:Name="chkLaunchCheats" Content="-cheats"
+                                                  Foreground="#ccc" FontFamily="Segoe UI"
+                                                  ToolTip="Developer cheats u igri"/>
+                                    </StackPanel>
 
                                     <Button x:Name="btnSavePlayerSettings" Content="Spremi Postavke"
                                             Style="{StaticResource BtnPrimary}" HorizontalAlignment="Left"
@@ -4778,6 +5120,23 @@ $script:PreloadedLocalModCount = $null
                                         <CheckBox x:Name="chkSizeCheck" Grid.Column="1"
                                                   Style="{StaticResource ToggleSwitch}"
                                                   VerticalAlignment="Center" IsChecked="True"/>
+                                    </Grid>
+
+                                    <Grid Margin="0,0,0,14">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="Maximiziraj prozor pri pokretanju" FontSize="13"
+                                                       Foreground="#ddd" FontFamily="Segoe UI"/>
+                                            <TextBlock Text="Launcher otvoren preko cijelog radnog podrucja (F11 = cijeli zaslon)"
+                                                       FontSize="11" Foreground="#666" FontFamily="Segoe UI"
+                                                       Margin="0,2,0,0"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="chkWindowMaximize" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  VerticalAlignment="Center"/>
                                     </Grid>
 
                                     <Grid Margin="0,0,0,14">
@@ -5074,6 +5433,7 @@ try {
 } catch {}
 
 $titleBar            = $window.FindName("titleBar")
+$btnFullscreen       = $window.FindName("btnFullscreen")
 $btnMinimize         = $window.FindName("btnMinimize")
 $btnClose            = $window.FindName("btnClose")
 $imgLogo             = $window.FindName("imgLogo")
@@ -5158,8 +5518,19 @@ $lstMods             = $window.FindName("lstMods")
 $txtModStatus        = $window.FindName("txtModStatus")
 $txtGameExe          = $window.FindName("txtGameExe")
 $txtModsPath         = $window.FindName("txtModsPath")
+$txtSavegamesPath    = $window.FindName("txtSavegamesPath")
+$txtDlcPath          = $window.FindName("txtDlcPath")
+$platformSteam       = $window.FindName("platformSteam")
+$platformGiants      = $window.FindName("platformGiants")
+$platformXbox        = $window.FindName("platformXbox")
 $btnBrowseExe        = $window.FindName("btnBrowseExe")
+$btnAutoDetectGame   = $window.FindName("btnAutoDetectGame")
 $btnBrowseMods       = $window.FindName("btnBrowseMods")
+$btnBrowseSavegames  = $window.FindName("btnBrowseSavegames")
+$btnBrowseDlc        = $window.FindName("btnBrowseDlc")
+$chkLaunchSkipIntro  = $window.FindName("chkLaunchSkipIntro")
+$chkLaunchCheats     = $window.FindName("chkLaunchCheats")
+$chkWindowMaximize   = $window.FindName("chkWindowMaximize")
 $btnSavePlayerSettings = $window.FindName("btnSavePlayerSettings")
 $btnLinkWeb          = $window.FindName("btnLinkWeb")
 $btnLinkDiscord      = $window.FindName("btnLinkDiscord")
@@ -5281,6 +5652,14 @@ $window.Add_Activated({
     } catch {}
 })
 $btnMinimize.Add_Click({ $window.WindowState = 'Minimized' })
+if ($btnFullscreen) { $btnFullscreen.Add_Click({ Toggle-WindowFullscreen }) }
+$window.Add_PreviewKeyDown({
+    param($sender, $e)
+    if ($e.Key -eq 'F11') {
+        Toggle-WindowFullscreen
+        $e.Handled = $true
+    }
+})
 $btnClose.Add_Click({ $window.Close() })
 
 # ============================================================
@@ -5355,6 +5734,7 @@ $navSettings.Add_Checked({
     $gs = Read-GameSettings
     $chkIntroScene.IsChecked = $gs.introScene
     $chkDevConsole.IsChecked = $gs.devConsole
+    Sync-GameLaunchUiFromConfig
     Update-LicenseUi
 })
 $navLog.Add_Checked({ Set-Page 'log' })
@@ -6737,44 +7117,14 @@ function Join-Server {
 
     Write-Log "Pokrecem FS25 za server: $($server.name)..."
     $txtJoinStatus.Text = "Pokrecem igru..."
-    # Osiguraj da je isIntroActive u gameSettings.xml sinkroniziran s launcher postavkom
-    # Ovo radi i za Giants Launcher i za Steam jer se citaj iz gameSettings.xml
-    $launchArgs = @()
     try {
-        $gsContent = Get-Content $gsPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-        $introOff = $false
-        if ($gsContent -match '<isIntroActive>([^<]*)</isIntroActive>') { if ($matches[1].Trim() -eq 'false') { $introOff = $true } }
-        elseif ($gsContent -match '<isIntroActive\s+value="([^"]*)"') { if ($matches[1].Trim() -eq 'false') { $introOff = $true } }
-        if ($introOff) {
-            $launchArgs += '-skipStartVideos'
-            Write-Log "Launch arg: -skipStartVideos (intro iskljucen)"
-        }
-    } catch {}
-    # Pokreni igru - podrzava Steam i Giants Launcher
-    $isGiantsLauncher = $false
-    try {
-        # Detektiraj je li FS25 instaliran preko Giants Launchera
-        $parentDir = Split-Path $exePath -Parent
-        $giantsLauncher = Join-Path $parentDir "GiantsLauncher.exe"
-        if (-not (Test-Path $giantsLauncher)) {
-            # Giants Launcher moze biti u parent folderu
-            $giantsLauncher = Join-Path (Split-Path $parentDir -Parent) "GiantsLauncher.exe"
-        }
-        if (Test-Path $giantsLauncher) { $isGiantsLauncher = $true }
-        # Alternativna detekcija: Steam ima steam_api64.dll
-        $steamDll = Join-Path $parentDir "steam_api64.dll"
-        if (Test-Path $steamDll) { $isGiantsLauncher = $false }
-    } catch {}
-    if ($isGiantsLauncher -and $launchArgs.Count -gt 0) {
-        # Giants Launcher ignorira command line argumente
-        # Ali gameSettings.xml je vec postavljen (Write-GameSetting iznad)
-        # Pokreni igru normalno - isIntroActive u xml-u ce uciniti svoje
-        Write-Log "Giants Launcher detektiran - intro kontroliran kroz gameSettings.xml"
-        Start-Process $exePath
-    } elseif ($launchArgs.Count -gt 0) {
-        Start-Process $exePath -ArgumentList $launchArgs
-    } else {
-        Start-Process $exePath
+        Start-FS25Game -ExePath $exePath
+    } catch {
+        Write-Log "GRESKA pokretanje igre: $($_.Exception.Message)"
+        Show-SRDialog "Ne mogu pokrenuti igru:`n$($_.Exception.Message)" "SR Launcher" "Error"
+        $txtJoinStatus.Visibility = 'Collapsed'
+        $btnJoinServer.IsEnabled = $true
+        return
     }
     # License: heartbeat + spawn detached session-end watcher
     try {

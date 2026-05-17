@@ -24,7 +24,7 @@
                    {
                        "inline":  false,
                        "name":  "SR Manager (vs generic hub)",
-                       "value":  "- Vise FS25 servera + ping i live status\n- Licenca / HWID / probna 3 dana (bot API)\n- SHA-256 mod manifest i sync (server-authoritative)\n- GitHub auto-update (ZIP + SlavonskaRavnica.ps1)\n- Admin mod, bot config sync, session heartbeat\n- UI 2.2: favoriti, PRIKAZ dropdown, save wizard skeleton, mod thumbnails\n- Mod thumbnails iz ZIP (modDesc), filter po kategoriji\n- Desktop shortcut -\u003e Pokreni SR Manager.bat"
+                       "value":  "- Vise FS25 servera + ping i live status\n- Licenca / HWID / probna 3 dana (bot API)\n- SHA-256 mod manifest i sync (server-authoritative)\n- GitHub auto-update (ZIP + SlavonskaRavnica.ps1)\n- Admin mod, bot config sync, session heartbeat\n- UI 2.2: sidebar RADNI PROSTOR / BIBLIOTEKA / ZBIRKE\n- Multiplayer folderi (JSON AppData, favoriti, join path)\n- Mod thumbnails, filter, favoriti; desktop shortcut bat"
                    }
                ],
     "buttonLabel":  "Skini SR Manager (ZIP)",
