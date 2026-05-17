@@ -5,9 +5,12 @@
 # GitHub Auto-Update | Multi-Server | Admin/Player | Mod Sync
 # ============================================================
 
+# TEST-POKRENI.bat postavlja SR_MANAGER_TEST=1 - ne skrivaj konzolu (dijagnostika)
+$script:IsTestLaunch = ($env:SR_MANAGER_TEST -eq '1')
+
 # Sakrij konzolu ODMAH - koristimo user32.dll direktno bez Add-Type kompilacije
 # Add-Type -MemberDefinition koristi csc.exe koji otvori konzolu, zato koristimo alternativu
-try {
+if (-not $script:IsTestLaunch) { try {
     $sig = '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);'
     $sig += '[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();'
     if (-not ([System.Management.Automation.PSTypeName]'HideConsole.W32').Type) {
@@ -15,12 +18,43 @@ try {
     }
     $hw = [HideConsole.W32]::GetConsoleWindow()
     if ($hw -ne [IntPtr]::Zero) { [HideConsole.W32]::ShowWindow($hw, 0) | Out-Null }
-} catch {}
+} catch {} }
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Windows.Forms
+
+function Show-EarlySplash {
+    if ($script:EarlySplash) { return }
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = 'SR Manager'
+    $f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $f.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+    $f.ClientSize = New-Object System.Drawing.Size(360, 100)
+    $f.TopMost = $true
+    $f.BackColor = [System.Drawing.Color]::FromArgb(13, 13, 13)
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = 'Ucitavanje SR Manager...'
+    $lbl.ForeColor = [System.Drawing.Color]::FromArgb(245, 197, 24)
+    $lbl.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Regular)
+    $lbl.AutoSize = $true
+    $lbl.Location = New-Object System.Drawing.Point(48, 38)
+    $f.Controls.Add($lbl) | Out-Null
+    $f.Show()
+    [System.Windows.Forms.Application]::DoEvents()
+    $script:EarlySplash = $f
+}
+function Close-EarlySplash {
+    try {
+        if ($script:EarlySplash) {
+            $script:EarlySplash.Close()
+            $script:EarlySplash.Dispose()
+            $script:EarlySplash = $null
+        }
+    } catch {}
+}
+Show-EarlySplash
 
 # Postavi AppUserModelID za taskbar (da ne pokazuje PowerShell ikonu)
 try {
@@ -34,12 +68,13 @@ try {
 # ============================================================
 # CONSTANTS
 # ============================================================
-$script:AppVersion = "2.1.0.5"
+$script:AppVersion = "2.2.0.2"
 $script:ConfigPath = Join-Path $PSScriptRoot "sr_config.json"
 $script:IsAdmin = $false
 $script:GitHubRepo = ""
 $script:LatestVersion = $null
 $script:ModListCached = $false
+$script:ModThumbsPath = Join-Path $env:APPDATA 'SR-Launcher\mod-thumbs'
 
 # License system
 $script:LicenseRepoOwner = "7oncha"
@@ -115,6 +150,43 @@ function Get-LicenseCache {
 }
 function Clear-LicenseCache {
     try { if (Test-Path $script:LicenseCachePath) { Remove-Item $script:LicenseCachePath -Force } } catch {}
+}
+
+function Update-LicenseUi {
+    $hwid = Get-Hwid
+    if ($txtHwidShort) {
+        $short = if ($hwid.Length -gt 20) { "$($hwid.Substring(0, 16))..." } else { $hwid }
+        $txtHwidShort.Text = "HWID: $short"
+    }
+    $disabled = $false
+    try { $disabled = [bool]$script:LicenseSystemDisabled } catch {}
+    if ($disabled) {
+        if ($txtLicenseStatus) { $txtLicenseStatus.Text = 'Provjera licence iskljucena (nema licenseApi u konfiguraciji).' }
+        if ($txtLicenseExpiry) { $txtLicenseExpiry.Text = 'Launcher radi bez kljuca - tipicno za dev/test paket.' }
+        if ($licenseBadge) { $licenseBadge.Visibility = 'Collapsed' }
+        return
+    }
+    $cache = Get-LicenseCache
+    if (-not $cache -or -not $cache.key) {
+        if ($txtLicenseStatus) { $txtLicenseStatus.Text = 'Nema spremljene licence na ovom racunalu.' }
+        if ($txtLicenseExpiry) { $txtLicenseExpiry.Text = 'Klikni Promijeni licencu za aktivaciju ili probu (3 dana).' }
+        if ($licenseBadge) { $licenseBadge.Visibility = 'Collapsed' }
+        return
+    }
+    if ($txtLicenseStatus) { $txtLicenseStatus.Text = 'Licenca aktivna na ovom racunalu (HWID vezana).' }
+    $expLine = ''
+    try {
+        if ($cache.permanent -eq $true) { $expLine = 'Trajna licenca' }
+        elseif ($cache.expiresAt) {
+            $exp = [datetime]::Parse($cache.expiresAt).ToLocalTime()
+            $expLine = "Vrijedi do: $($exp.ToString('dd.MM.yyyy HH:mm'))"
+        }
+    } catch {}
+    if ($txtLicenseExpiry) { $txtLicenseExpiry.Text = $expLine }
+    if ($licenseBadge) {
+        $licenseBadge.Visibility = 'Visible'
+        if ($txtLicenseBadge) { $txtLicenseBadge.Text = 'LICENCA OK' }
+    }
 }
 
 # ============================================================
@@ -450,6 +522,777 @@ function Find-ModsPath {
     return ""
 }
 
+function Test-PlaceholderGameVersion {
+    param([string]$Version)
+    if (-not $Version) { return $true }
+    $v = $Version.Trim()
+    if ($v -eq '0.0.0.0') { return $true }
+    # FS25 .exe PE resources often report Windows placeholder 10.0.0.0 - not the game patch.
+    if ($v -match '^10\.\d+\.\d+\.\d+$') { return $true }
+    return $false
+}
+
+function Get-VersionFromXmlText {
+    param([string]$Content)
+    if (-not $Content) { return '' }
+    if ($Content -match '<version\s+[^>]*\bnumber="([^"]+)"') { return $Matches[1].Trim() }
+    if ($Content -match '<version[^>]*>([^<]+)</version>') { return $Matches[1].Trim() }
+    if ($Content -match '<version\s+value="([^"]+)"') { return $Matches[1].Trim() }
+    if ($Content -match '<gameVersion>([^<]+)</gameVersion>') { return $Matches[1].Trim() }
+    return ''
+}
+
+function Get-FS25GameVersion {
+    param([string]$ExePath)
+    if (-not $ExePath -or -not (Test-Path $ExePath)) { return '' }
+
+    $gameDir = Split-Path $ExePath -Parent
+    $versionXml = Join-Path $gameDir 'version.xml'
+    if (Test-Path $versionXml) {
+        try {
+            $v = Get-VersionFromXmlText (Get-Content $versionXml -Raw -Encoding UTF8 -ErrorAction Stop)
+            if ($v -and -not (Test-PlaceholderGameVersion $v)) {
+                Write-Log "Verzija igre (version.xml): $v"
+                return $v
+            }
+        } catch {
+            Write-Log "WARN version.xml: $($_.Exception.Message)"
+        }
+    }
+
+    $gsPath = Get-GameSettingsPath
+    if (Test-Path $gsPath) {
+        try {
+            $gsContent = Get-Content $gsPath -Raw -Encoding UTF8 -ErrorAction Stop
+            $v = Get-VersionFromXmlText $gsContent
+            if ($v -and -not (Test-PlaceholderGameVersion $v)) {
+                Write-Log "Verzija igre (gameSettings.xml): $v"
+                return $v
+            }
+        } catch {
+            Write-Log "WARN gameSettings verzija: $($_.Exception.Message)"
+        }
+    }
+
+    try {
+        $vi = (Get-Item $ExePath).VersionInfo
+        foreach ($cand in @($vi.ProductVersion, $vi.FileVersion)) {
+            if ($cand -and -not (Test-PlaceholderGameVersion $cand)) {
+                $v = $cand.Trim()
+                Write-Log "Verzija igre (exe VersionInfo): $v"
+                return $v
+            }
+        }
+    } catch {
+        Write-Log "WARN exe VersionInfo: $($_.Exception.Message)"
+    }
+
+    Write-Log "WARN: Verzija igre nije odredena (ignoriram PE placeholder 10.0.0.0)."
+    return ''
+}
+
+function Get-NormalizedModZipName {
+    param([string]$Name)
+    if (-not $Name) { return '' }
+    $n = $Name.Trim()
+    if ($n -notmatch '\.zip$') { $n = "$n.zip" }
+    return $n.ToLowerInvariant()
+}
+
+# Kanonski kljuc za usporedbu: FS25_ prefiks, razmaci/crtice, sufiks verzije (v1.0.0.9).
+function Get-CanonicalModKey {
+    param([string]$Name)
+    if (-not $Name) { return '' }
+    $base = ($Name -replace '\.zip$', '').Trim()
+    if ($base -match '(?i)^fs25[_\-\s]*(.*)$') { $base = $Matches[1].Trim() }
+    $base = $base -replace '(?i)[\s_\-]+v?\d+(\.\d+){1,3}([\s_\-].*)?$', ''
+    $base = $base -replace '(?i)[\s_\-]*(beta|alpha|rc\d*)$', ''
+    return ($base -replace '[^a-z0-9]', '').ToLowerInvariant()
+}
+
+function Build-LocalModIndex {
+    param([array]$LocalMods)
+    $byNorm = @{}
+    $byCanon = @{}
+    foreach ($m in $LocalMods) {
+        $nk = Get-NormalizedModZipName $m.Name
+        if ($nk -and -not $byNorm.ContainsKey($nk)) { $byNorm[$nk] = $m }
+        $ck = Get-CanonicalModKey $m.Name
+        if ($ck -and -not $byCanon.ContainsKey($ck)) { $byCanon[$ck] = $m }
+        if ($m.BaseName) {
+            $bk = Get-CanonicalModKey $m.BaseName
+            if ($bk -and -not $byCanon.ContainsKey($bk)) { $byCanon[$bk] = $m }
+        }
+    }
+    return @{ ByNorm = $byNorm; ByCanon = $byCanon }
+}
+
+function Find-LocalModEntry {
+    param(
+        [hashtable]$LocalIndex,
+        [string]$ServerName
+    )
+    if (-not $LocalIndex) { return $null }
+    $bn = $LocalIndex.ByNorm
+    $bc = $LocalIndex.ByCanon
+    $key = Get-NormalizedModZipName $ServerName
+    if ($key -and $bn -and $bn.ContainsKey($key)) { return $bn[$key] }
+    $ck = Get-CanonicalModKey $ServerName
+    if ($ck -and $bc -and $bc.ContainsKey($ck)) { return $bc[$ck] }
+    return $null
+}
+
+function New-ModSyncItem {
+    param(
+        [string]$Status,
+        [string]$DisplayName,
+        [string]$ZipName,
+        [string]$Local,
+        [string]$Server,
+        [string]$Size,
+        [string]$StatusDetail = '',
+        [string]$LocalSha = '',
+        [string]$ServerSha = '',
+        [string]$Version = '-',
+        [string]$ModType = 'Other',
+        [string]$LocalZipPath = ''
+    )
+    if (-not $ModType) { $ModType = 'Other' }
+    $ModType = Normalize-ModTypeLabel $ModType
+    $initial = if ($DisplayName) { ([string]$DisplayName).Substring(0, 1).ToUpper() } else { '?' }
+    $tip = "$DisplayName`nStatus: $Status ($((Get-ModSyncStatusLabel $Status)))"
+    if ($StatusDetail) { $tip += " - $StatusDetail" }
+    $tip += "`nKategorija: $ModType`nZIP: $ZipName`nLokalno: $Local  |  Server: $Server  |  Velicina: $Size"
+    if ($Version -and $Version -ne '-') { $tip += "`nVerzija: $Version" }
+    if ($LocalSha -or $ServerSha) {
+        if ($LocalSha) { $tip += "`nLokal SHA: $LocalSha" }
+        if ($ServerSha) { $tip += "`nServer SHA: $ServerSha" }
+    }
+    return [PSCustomObject]@{
+        Status        = $Status
+        Name          = $DisplayName
+        ZipName       = $ZipName
+        Local         = $Local
+        Server        = $Server
+        Size          = $Size
+        Version       = $Version
+        Category      = $ModType
+        ModType       = $ModType
+        ModTypeSort   = (Get-ModTypeSortOrder $ModType)
+        Initial       = $initial
+        StatusDetail  = $StatusDetail
+        ToolTipText   = $tip
+        LocalZipPath  = $LocalZipPath
+        ThumbSource   = $null
+        HasThumb      = $false
+        ThumbLoading  = $false
+    }
+}
+
+function Get-MissingSyncModItems {
+    if (-not $script:AllModItems) { return @() }
+    return @($script:AllModItems | Where-Object { $_.Status -eq 'FALI' -or $_.Status -eq 'ZASTARIO' })
+}
+
+function Resolve-ServerModEntry {
+    param(
+        [array]$ServerMods,
+        [string]$DisplayOrZipName
+    )
+    if (-not $ServerMods -or -not $DisplayOrZipName) { return $null }
+    $exact = $ServerMods | Where-Object {
+        $_.Name -eq $DisplayOrZipName -or
+        $_.Name -eq "$DisplayOrZipName.zip" -or
+        ($_.Name -replace '\.zip$','') -eq $DisplayOrZipName
+    } | Select-Object -First 1
+    if ($exact) { return $exact }
+    $ck = Get-CanonicalModKey $DisplayOrZipName
+    if (-not $ck) { return $null }
+    foreach ($sm in $ServerMods) {
+        if ((Get-CanonicalModKey $sm.Name) -eq $ck) { return $sm }
+    }
+    return $null
+}
+
+# ============================================================
+# SAVEGAME & MOD PROFILES (Phase 1 - pregled, bez opasnih editova)
+# ============================================================
+$script:ModProfilesPath = Join-Path $env:APPDATA "SR-Launcher\mod-profiles.json"
+$script:WalkthroughPath = Join-Path $env:APPDATA "SR-Launcher\walkthrough.json"
+
+function Get-WalkthroughSettings {
+    $default = [PSCustomObject]@{
+        skipOnLaunch = $false
+        completed    = $false
+        lastStep     = 0
+    }
+    if (-not (Test-Path $script:WalkthroughPath)) { return $default }
+    try {
+        $raw = Get-Content $script:WalkthroughPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        return [PSCustomObject]@{
+            skipOnLaunch = [bool]$raw.skipOnLaunch
+            completed    = [bool]$raw.completed
+            lastStep     = [int]$raw.lastStep
+        }
+    } catch { return $default }
+}
+
+function Save-WalkthroughSettings {
+    param($Settings)
+    $dir = Split-Path $script:WalkthroughPath -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    @{
+        skipOnLaunch = [bool]$Settings.skipOnLaunch
+        completed    = [bool]$Settings.completed
+        lastStep     = [int]$Settings.lastStep
+    } | ConvertTo-Json | Set-Content $script:WalkthroughPath -Encoding UTF8
+}
+
+function Get-ModSyncStatusLabel {
+    param([string]$Status)
+    switch ($Status) {
+        'OK'        { return 'Sinkronizirano' }
+        'FALI'      { return 'Nedostaje' }
+        'ZASTARIO'  { return 'Azuriraj' }
+        'Extra'     { return 'Lokalno extra' }
+        'Lokalno'   { return 'Lokalno' }
+        default     { return 'Mod' }
+    }
+}
+
+function Get-ModTypeSortOrder {
+    param([string]$ModType)
+    switch ($ModType) {
+        'Map'       { return 0 }
+        'Vehicle'   { return 1 }
+        'Placeable' { return 2 }
+        'Script'    { return 3 }
+        'Tool'      { return 4 }
+        'Animal'    { return 5 }
+        'Other'     { return 6 }
+        default     { return 7 }
+    }
+}
+
+function Normalize-ModTypeLabel {
+    param([string]$Raw)
+    if (-not $Raw) { return 'Other' }
+    $t = $Raw.Trim().ToLowerInvariant()
+    switch -Regex ($t) {
+        '^(map|maps)$' { return 'Map' }
+        '^(vehicle|vehicles|tractor|trailer|implement|tool|handtool|handtools)$' { return 'Vehicle' }
+        '^(placeable|placeables|building|production)$' { return 'Placeable' }
+        '^(script|scripts|specialization)$' { return 'Script' }
+        '^(animal|animals)$' { return 'Animal' }
+        default {
+            if ($t -match 'vehicle|tractor|trailer|implement') { return 'Vehicle' }
+            if ($t -match 'placeable|building') { return 'Placeable' }
+            if ($t -match 'map') { return 'Map' }
+            if ($t -match 'script') { return 'Script' }
+            if ($t.Length -gt 1) { return ($t.Substring(0,1).ToUpper() + $t.Substring(1)) }
+            return $t.ToUpper()
+        }
+    }
+}
+
+function Get-ModTypeFromModDescXml {
+    param([string]$XmlText)
+    if (-not $XmlText) { return 'Other' }
+    try {
+        [xml]$doc = $XmlText
+        $root = $doc.modDesc
+        if (-not $root) { return 'Other' }
+        if ($root.map) { return 'Map' }
+        if ($root.vehicle -or $root.vehicles) { return 'Vehicle' }
+        if ($root.placeable -or $root.placeables) { return 'Placeable' }
+        if ($root.animal -or $root.animals) { return 'Animal' }
+        if ($root.script -or $root.scripts) { return 'Script' }
+        if ($root.handTool -or $root.handTools) { return 'Tool' }
+        foreach ($attr in @('type', 'modType', 'category')) {
+            try {
+                $val = $root.$attr
+                if ($val) { return (Normalize-ModTypeLabel ([string]$val)) }
+            } catch {}
+        }
+        $store = $root.storeItems
+        if ($store) {
+            $si = @($store.storeItem)[0]
+            if ($si) {
+                foreach ($attr in @('type', 'category')) {
+                    try {
+                        $val = $si.$attr
+                        if ($val) { return (Normalize-ModTypeLabel ([string]$val)) }
+                    } catch {}
+                }
+            }
+        }
+    } catch {}
+    if ($XmlText -match '<map[\s>]' ) { return 'Map' }
+    if ($XmlText -match '<vehicle[\s>]' ) { return 'Vehicle' }
+    if ($XmlText -match '<placeable[\s>]' ) { return 'Placeable' }
+    if ($XmlText -match '<script[\s>]' ) { return 'Script' }
+    return 'Other'
+}
+
+function Get-ModIconFilenameFromModDescXml {
+    param([string]$XmlText)
+    if (-not $XmlText) { return $null }
+    foreach ($pat in @(
+        '<iconFilename>\s*([^<]+)\s*</iconFilename>',
+        'iconFilename\s*=\s*"([^"]+)"',
+        '<storeIcon>\s*([^<]+)\s*</storeIcon>',
+        'storeIcon\s*=\s*"([^"]+)"'
+    )) {
+        if ($XmlText -match $pat) { return $Matches[1].Trim() }
+    }
+    return $null
+}
+
+function Get-ModDescEntryFromZip {
+    param([System.IO.Compression.ZipArchive]$Zip)
+    $best = $null
+    foreach ($e in $Zip.Entries) {
+        if ($e.FullName -notmatch '(?i)modDesc\.xml$') { continue }
+        if (-not $best) { $best = $e; continue }
+        $depth = ($e.FullName -split '/').Count
+        $bestDepth = ($best.FullName -split '/').Count
+        if ($depth -lt $bestDepth) { $best = $e }
+    }
+    return $best
+}
+
+function Find-ModIconZipEntry {
+    param(
+        [System.IO.Compression.ZipArchive]$Zip,
+        [string]$IconFilename,
+        [string]$ModDescPath
+    )
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($IconFilename) {
+        $candidates.Add($IconFilename)
+        $candidates.Add((Split-Path $IconFilename -Leaf))
+    }
+    $candidates.AddRange(@('icon.png', 'store_icon.png', 'icon.dds', 'store_icon.dds', 'icon.jpg'))
+    $modDir = ''
+    if ($ModDescPath -and $ModDescPath -match '[\\/]') {
+        $modDir = ($ModDescPath -replace '(?i)modDesc\.xml$', '').TrimEnd('\', '/')
+    }
+    foreach ($name in $candidates) {
+        if (-not $name) { continue }
+        $leaf = ($name -replace '\\', '/')
+        foreach ($e in $Zip.Entries) {
+            $fn = ($e.FullName -replace '\\', '/').TrimStart('/')
+            if ($fn -ieq $leaf) { return $e }
+            if ($modDir -and ($fn -ieq "$modDir/$leaf")) { return $e }
+            if ($fn -ieq (Split-Path $leaf -Leaf)) { return $e }
+        }
+    }
+    foreach ($e in $Zip.Entries) {
+        $fn = ($e.FullName -replace '\\', '/')
+        if ($fn -imatch '(^|/)(store_)?icon\.(png|jpg|jpeg|dds)$') { return $e }
+    }
+    return $null
+}
+
+function Get-ModThumbnailCachePath {
+    param([string]$ZipPath)
+    if (-not $ZipPath -or -not (Test-Path $ZipPath)) { return $null }
+    try {
+        $fi = Get-Item $ZipPath -ErrorAction Stop
+        $key = Get-SHA256 "$($fi.FullName)|$($fi.Length)|$($fi.LastWriteTimeUtc.Ticks)"
+        return (Join-Path $script:ModThumbsPath "$key.png")
+    } catch { return $null }
+}
+
+function Convert-DdsBytesToPngFile {
+    param([byte[]]$Bytes, [string]$OutPath)
+    if (-not $Bytes -or $Bytes.Length -lt 128) { return $false }
+    try {
+        if ([Text.Encoding]::ASCII.GetString($Bytes, 0, 4) -ne 'DDS ') { return $false }
+        $h = [BitConverter]::ToInt32($Bytes, 12)
+        $w = [BitConverter]::ToInt32($Bytes, 16)
+        if ($w -le 0 -or $h -le 0 -or $w -gt 2048 -or $h -gt 2048) { return $false }
+        $pf = [BitConverter]::ToUInt32($Bytes, 84)
+        $dataOff = 128
+        if ($Bytes.Length -lt ($dataOff + 8)) { return $false }
+        $rgba = New-Object byte[] ($w * $h * 4)
+        if ($pf -eq 0x31545844) {
+            # DXT1
+            $blocksX = [Math]::Max(1, [int][Math]::Ceiling($w / 4.0))
+            $blocksY = [Math]::Max(1, [int][Math]::Ceiling($h / 4.0))
+            $pos = $dataOff
+            for ($by = 0; $by -lt $blocksY; $by++) {
+                for ($bx = 0; $bx -lt $blocksX; $bx++) {
+                    if ($pos + 8 -gt $Bytes.Length) { return $false }
+                    $c0 = [BitConverter]::ToUInt16($Bytes, $pos); $pos += 2
+                    $c1 = [BitConverter]::ToUInt16($Bytes, $pos); $pos += 2
+                    $bits = [BitConverter]::ToUInt32($Bytes, $pos); $pos += 4
+                    $pal = New-Object uint32[] 4
+                    $pal[0] = Convert-Rgb565ToArgb $c0 255
+                    $pal[1] = Convert-Rgb565ToArgb $c1 255
+                    $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255
+                    $pal[3] = 0
+                    if ($c0 -le $c1) { $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255; $pal[3] = 0 }
+                    for ($py = 0; $py -lt 4; $py++) {
+                        for ($px = 0; $px -lt 4; $px++) {
+                            $x = $bx * 4 + $px; $y = $by * 4 + $py
+                            if ($x -ge $w -or $y -ge $h) { continue }
+                            $idx = [int](($bits -shr (2 * ($py * 4 + $px))) -band 3)
+                            $c = $pal[$idx]
+                            $o = ($y * $w + $x) * 4
+                            $rgba[$o]     = [byte]($c -band 0xFF)
+                            $rgba[$o + 1] = [byte](($c -shr 8) -band 0xFF)
+                            $rgba[$o + 2] = [byte](($c -shr 16) -band 0xFF)
+                            $rgba[$o + 3] = if ($idx -eq 3 -and $c0 -gt $c1) { 0 } else { 255 }
+                        }
+                    }
+                }
+            }
+        } elseif ($pf -eq 0x20534444) {
+            # Uncompressed 32-bit (rare)
+            $need = $dataOff + ($w * $h * 4)
+            if ($Bytes.Length -lt $need) { return $false }
+            [Array]::Copy($Bytes, $dataOff, $rgba, 0, $rgba.Length)
+        } else {
+            return $false
+        }
+        Save-RgbaBitmapAsPng -Rgba $rgba -Width $w -Height $h -OutPath $OutPath
+        return $true
+    } catch { return $false }
+}
+
+function Convert-Rgb565ToArgb {
+    param([uint16]$C, [byte]$A = 255)
+    $r = (($C -shr 11) -band 0x1F) * 255 / 31
+    $g = (($C -shr 5) -band 0x3F) * 255 / 63
+    $b = ($C -band 0x1F) * 255 / 31
+    return [uint32]($b -bor ($g -shl 8) -bor ($r -shl 16) -bor ($A -shl 24))
+}
+
+function Save-RgbaBitmapAsPng {
+    param([byte[]]$Rgba, [int]$Width, [int]$Height, [string]$OutPath)
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    $bmp = New-Object System.Drawing.Bitmap $Width, $Height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $bd = $bmp.LockBits([System.Drawing.Rectangle]::FromLTRB(0, 0, $Width, $Height),
+        [System.Drawing.Imaging.ImageLockMode]::WriteOnly,
+        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        [System.Runtime.InteropServices.Marshal]::Copy($Rgba, 0, $bd.Scan0, $Rgba.Length)
+    } finally {
+        $bmp.UnlockBits($bd)
+    }
+    $dir = Split-Path $OutPath -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+}
+
+function Export-ModIconEntryToPng {
+    param(
+        [System.IO.Compression.ZipArchiveEntry]$Entry,
+        [string]$OutPath
+    )
+    if (-not $Entry) { return $false }
+    $ms = New-Object System.IO.MemoryStream
+    try {
+        $s = $Entry.Open()
+        try { $s.CopyTo($ms) } finally { $s.Dispose() }
+        $bytes = $ms.ToArray()
+    } finally { $ms.Dispose() }
+    $leaf = Split-Path $Entry.FullName -Leaf
+    if ($leaf -match '\.(png|jpg|jpeg)$') {
+        $dir = Split-Path $OutPath -Parent
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        [IO.File]::WriteAllBytes($OutPath, $bytes)
+        return $true
+    }
+    if ($leaf -match '\.dds$') {
+        return (Convert-DdsBytesToPngFile -Bytes $bytes -OutPath $OutPath)
+    }
+    return $false
+}
+
+function Get-ModMetaFromZip {
+    param([string]$ZipPath)
+    $result = [PSCustomObject]@{
+        ModType  = 'Other'
+        Version  = ''
+        IconFile = ''
+    }
+    if (-not $ZipPath -or -not (Test-Path $ZipPath)) { return $result }
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue | Out-Null
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+        try {
+            $desc = Get-ModDescEntryFromZip -Zip $zip
+            if (-not $desc) { return $result }
+            $sr = New-Object System.IO.StreamReader($desc.Open())
+            try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
+            $result.ModType = Get-ModTypeFromModDescXml -XmlText $xml
+            if ($xml -match '<version>\s*([^<]+)\s*</version>') { $result.Version = $Matches[1].Trim() }
+            elseif ($xml -match 'version\s*=\s*"([^"]+)"') { $result.Version = $Matches[1].Trim() }
+            $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
+            $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
+            if ($iconEntry) { $result.IconFile = $iconEntry.FullName }
+        } finally {
+            $zip.Dispose()
+        }
+    } catch {}
+    return $result
+}
+
+function Get-ModThumbnailFromZip {
+    param([string]$ZipPath)
+    $cache = Get-ModThumbnailCachePath -ZipPath $ZipPath
+    if (-not $cache) { return $null }
+    if (Test-Path $cache) { return $cache }
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue | Out-Null
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+        try {
+            $desc = Get-ModDescEntryFromZip -Zip $zip
+            if (-not $desc) { return $null }
+            $sr = New-Object System.IO.StreamReader($desc.Open())
+            try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
+            $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
+            $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
+            if (-not $iconEntry) { return $null }
+            if (Export-ModIconEntryToPng -Entry $iconEntry -OutPath $cache) { return $cache }
+        } finally {
+            $zip.Dispose()
+        }
+    } catch {}
+    return $null
+}
+
+function New-ModBitmapImage {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path $Path)) { return $null }
+    try {
+        $img = New-Object System.Windows.Media.Imaging.BitmapImage
+        $img.BeginInit()
+        $img.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+        $img.UriSource = [Uri]((Resolve-Path $Path).Path)
+        $img.EndInit()
+        $img.Freeze()
+        return $img
+    } catch { return $null }
+}
+
+function Start-ModThumbnailLoads {
+    param([array]$Items)
+    if (-not $Items -or $Items.Count -eq 0) { return }
+    if (-not $window) { return }
+    foreach ($item in @($Items)) {
+        if ($item.HasThumb -or $item.ThumbLoading) { continue }
+        if (-not $item.LocalZipPath -or -not (Test-Path $item.LocalZipPath)) { continue }
+        $cached = Get-ModThumbnailCachePath -ZipPath $item.LocalZipPath
+        if ($cached -and (Test-Path $cached)) {
+            $item.ThumbSource = New-ModBitmapImage $cached
+            $item.HasThumb = ($null -ne $item.ThumbSource)
+            continue
+        }
+        $item.ThumbLoading = $true
+        $zipPath = [string]$item.LocalZipPath
+        $itRef = $item
+        $cb = [System.Threading.WaitCallback]{
+            param($state)
+            $path = $null
+            try { $path = Get-ModThumbnailFromZip -ZipPath $state.Zip } catch {}
+            $state.Window.Dispatcher.BeginInvoke([Action]{
+                try {
+                    if ($path -and (Test-Path $path)) {
+                        $img = New-ModBitmapImage $path
+                        if ($img) {
+                            $state.Item.ThumbSource = $img
+                            $state.Item.HasThumb = $true
+                        }
+                    }
+                } catch {}
+                finally { $state.Item.ThumbLoading = $false }
+            }, [System.Windows.Threading.DispatcherPriority]::Background) | Out-Null
+        }
+        [void][System.Threading.ThreadPool]::QueueUserWorkItem($cb, @{
+            Zip    = $zipPath
+            Item   = $itRef
+            Window = $window
+        })
+    }
+}
+
+function Get-FS25UserDataPath {
+    $candidates = @(
+        (Join-Path ([Environment]::GetFolderPath('MyDocuments')) "My Games\FarmingSimulator2025"),
+        (Join-Path $env:USERPROFILE "Documents\My Games\FarmingSimulator2025"),
+        (Join-Path $env:USERPROFILE "OneDrive\Documents\My Games\FarmingSimulator2025")
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) { return $c }
+    }
+    return $null
+}
+
+function Get-SavegameSlotInfo {
+    param([string]$SlotDir, [int]$SlotNumber)
+    $info = [PSCustomObject]@{
+        Slot       = $SlotNumber
+        Folder     = $SlotDir
+        Name       = "savegame$SlotNumber"
+        MapTitle   = ""
+        Money      = ""
+        PlayTime   = ""
+        LastWrite  = ""
+        HasCareer  = $false
+        SizeMb     = 0.0
+    }
+    try {
+        $dirItem = Get-Item $SlotDir -ErrorAction SilentlyContinue
+        if ($dirItem) { $info.LastWrite = $dirItem.LastWriteTime.ToString("dd.MM.yyyy HH:mm") }
+        $total = (Get-ChildItem $SlotDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        if ($total) { $info.SizeMb = [Math]::Round($total / 1MB, 1) }
+    } catch {}
+    $careerPath = Join-Path $SlotDir "careerSavegame.xml"
+    if (Test-Path $careerPath) {
+        $info.HasCareer = $true
+        try {
+            $xml = Get-Content $careerPath -Raw -Encoding UTF8 -ErrorAction Stop
+            if ($xml -match '<savegameName>([^<]*)</savegameName>') { $info.Name = $Matches[1].Trim() }
+            if ($xml -match 'savegameName="([^"]*)"') { $info.Name = $Matches[1].Trim() }
+            if ($xml -match '<mapTitle>([^<]*)</mapTitle>') { $info.MapTitle = $Matches[1].Trim() }
+            if ($xml -match 'mapTitle="([^"]*)"') { $info.MapTitle = $Matches[1].Trim() }
+            if ($xml -match '<money>([^<]*)</money>') { $info.Money = $Matches[1].Trim() }
+            if ($xml -match '<playTime>([^<]*)</playTime>') { $info.PlayTime = $Matches[1].Trim() }
+        } catch {}
+    }
+    if (-not $info.MapTitle) {
+        foreach ($thumb in @('mapPreview.png', 'overview.png')) {
+            if (Test-Path (Join-Path $SlotDir $thumb)) { $info.MapTitle = "(mapa)"; break }
+        }
+    }
+    return $info
+}
+
+function Get-FS25SavegameList {
+    $root = Get-FS25UserDataPath
+    if (-not $root) { return @() }
+    $list = New-Object System.Collections.ArrayList
+    1..20 | ForEach-Object {
+        $slotDir = Join-Path $root "savegame$_"
+        if (Test-Path $slotDir) {
+            [void]$list.Add((Get-SavegameSlotInfo -SlotDir $slotDir -SlotNumber $_))
+        }
+    }
+    return @($list.ToArray())
+}
+
+function Get-ModProfilesStore {
+    $default = [PSCustomObject]@{
+        version         = 1
+        activeProfileId = ""
+        profiles        = @{}
+    }
+    if (-not (Test-Path $script:ModProfilesPath)) { return $default }
+    try {
+        $raw = Get-Content $script:ModProfilesPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $raw.profiles) { $raw | Add-Member -NotePropertyName profiles -NotePropertyValue (@{}) -Force }
+        return $raw
+    } catch {
+        return $default
+    }
+}
+
+function Save-ModProfilesStore {
+    param($Store)
+    $dir = Split-Path $script:ModProfilesPath -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $Store | ConvertTo-Json -Depth 6 | Set-Content $script:ModProfilesPath -Encoding UTF8
+}
+
+function Get-ServerModProfileId {
+    $server = Get-ActiveServer
+    $slug = ($server.name -replace '[^a-zA-Z0-9\-]', '-').ToLower().Trim('-')
+    if (-not $slug) { $slug = "server$($script:Config.activeServer)" }
+    return "server:$slug"
+}
+
+function Ensure-ServerModProfile {
+    $store = Get-ModProfilesStore
+    $id = Get-ServerModProfileId
+    $server = Get-ActiveServer
+    $profiles = @{}
+    if ($store.profiles) {
+        $store.profiles.PSObject.Properties | ForEach-Object { $profiles[$_.Name] = $_.Value }
+    }
+    if (-not $profiles.ContainsKey($id)) {
+        $profiles[$id] = [PSCustomObject]@{
+            id          = $id
+            label       = $server.name
+            type        = "server"
+            serverIndex = [int]$script:Config.activeServer
+            modsPath    = if ($script:Config.modsPath) { $script:Config.modsPath } else { "" }
+            launchArgs  = @()
+            notes       = "Auto profil za SR server"
+            updatedAt   = (Get-Date).ToString("o")
+        }
+        $store.profiles = $profiles
+        if (-not $store.activeProfileId) { $store.activeProfileId = $id }
+        Save-ModProfilesStore $store
+    }
+    return $store
+}
+
+function Get-ModProfileList {
+    $store = Ensure-ServerModProfile
+    $items = New-Object System.Collections.ArrayList
+    if ($store.profiles) {
+        $store.profiles.PSObject.Properties | ForEach-Object {
+            $p = $_.Value
+            $label = if ($p.label) { $p.label } else { $_.Name }
+            $type = if ($p.type) { $p.type } else { "custom" }
+            [void]$items.Add([PSCustomObject]@{
+                Id    = $_.Name
+                Label = $label
+                Type  = $type
+                Mods  = if ($p.modsPath) { $p.modsPath } else { "" }
+            })
+        }
+    }
+    return @($items.ToArray())
+}
+
+function Refresh-IgraPage {
+    if (-not $txtIgraSavePath -or -not $lstSavegames) { return }
+    $root = Get-FS25UserDataPath
+    if ($root) {
+        $txtIgraSavePath.Text = $root
+        $txtIgraSavePath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#aaa")
+    } else {
+        $txtIgraSavePath.Text = 'FS25 user data nije pronaden (My Games\FarmingSimulator2025)'
+        $txtIgraSavePath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E5484D")
+    }
+    $lstSavegames.ItemsSource = $null
+    $saves = Get-FS25SavegameList
+    if ($saves.Count -gt 0) {
+        $lstSavegames.ItemsSource = $saves
+        $txtIgraSaveHint.Text = ('{0} slotova - samo pregled (Phase 1). Uredi save tek nakon backupa (kasnije).' -f $saves.Count)
+    } else {
+        $txtIgraSaveHint.Text = "Nema savegame foldera. Spremi igru u FS25 pa osvjezi."
+    }
+    if ($cmbModProfiles) {
+        $profiles = Get-ModProfileList
+        $cmbModProfiles.ItemsSource = $profiles
+        $cmbModProfiles.DisplayMemberPath = "Label"
+        $store = Get-ModProfilesStore
+        if ($store.activeProfileId) {
+            $sel = $profiles | Where-Object { $_.Id -eq $store.activeProfileId } | Select-Object -First 1
+            if ($sel) { $cmbModProfiles.SelectedItem = $sel }
+        }
+        if (-not $cmbModProfiles.SelectedItem -and $profiles.Count -gt 0) {
+            $cmbModProfiles.SelectedIndex = 0
+        }
+    }
+}
+
 function Show-PasswordDialog {
     param([string]$dialogTitle, [string]$dialogPrompt)
     $dlg = New-Object System.Windows.Window
@@ -703,10 +1546,115 @@ function Show-SRConfirm {
 
 # ============================================================
 # AUTO-UPDATE
-# 1. Bot endpoint (/launcher/latest) — dinamicki dohvaca najnoviji GitHub release
-# 2. Fallback: GitHub Releases API — direktno provjerava releaseove
+# 1. Bot endpoint (/launcher/latest) - dinamicki dohvaca najnoviji GitHub release
+# 2. Fallback: GitHub Releases API - direktno provjerava releaseove
 # ============================================================
 $script:UpdateGitHubRepo = "7oncha/SRManager-Installer"
+$script:LauncherZipName = "SR_Manager.zip"
+
+function Get-LauncherManifest {
+    try {
+        $url = "https://raw.githubusercontent.com/$($script:UpdateGitHubRepo)/master/launcher/manifest.json?nocache=$([DateTime]::UtcNow.Ticks)"
+        return Invoke-RestMethod -Uri $url -Headers @{ "User-Agent" = "SlavonskaRavnica-Launcher" } -TimeoutSec 10
+    } catch { return $null }
+}
+
+function Get-LauncherZipDownloadUrl {
+    param($ReleaseAssets, $TagName)
+    $manifest = Get-LauncherManifest
+    if ($manifest -and $manifest.downloadUrl) { return [string]$manifest.downloadUrl }
+    if ($ReleaseAssets) {
+        $zip = $ReleaseAssets | Where-Object { $_.name -eq $script:LauncherZipName } | Select-Object -First 1
+        if ($zip -and $zip.browser_download_url) { return [string]$zip.browser_download_url }
+    }
+    if ($TagName) {
+        $tag = if ($TagName -match '^v') { $TagName } else { "v$TagName" }
+        return "https://github.com/$($script:UpdateGitHubRepo)/releases/download/$tag/$($script:LauncherZipName)"
+    }
+    return "https://github.com/$($script:UpdateGitHubRepo)/releases/latest/download/$($script:LauncherZipName)"
+}
+
+function Get-LauncherInstallDir {
+    $dir = $PSScriptRoot
+    if (-not $dir) {
+        $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    if (-not $dir) {
+        $dir = Split-Path -Parent $PSCommandPath
+    }
+    return [string]$dir
+}
+
+function Get-AppVersionFromScript {
+    param([string]$Path)
+    if (-not $Path) {
+        if ($PSCommandPath) { $Path = $PSCommandPath }
+        else { $Path = Join-Path (Get-LauncherInstallDir) 'SlavonskaRavnica.ps1' }
+    }
+    try {
+        if (Test-Path $Path) {
+            $m = [regex]::Match((Get-Content $Path -Raw -ErrorAction Stop), '\$script:AppVersion\s*=\s*"([^"]+)"')
+            if ($m.Success) { return $m.Groups[1].Value }
+        }
+    } catch {}
+    return $null
+}
+
+function Sync-AppVersionFromScript {
+    param([string]$Path)
+    $v = Get-AppVersionFromScript -Path $Path
+    if ($v) { $script:AppVersion = $v }
+    return $script:AppVersion
+}
+
+function Update-AppVersionDisplay {
+    if ($txtVersion) { $txtVersion.Text = "v$($script:AppVersion)" }
+}
+
+function Copy-LauncherPayloadToInstallDir {
+    param([string]$SourceDir, [string]$DestDir)
+    foreach ($item in Get-ChildItem $SourceDir -Force) {
+        $dest = Join-Path $DestDir $item.Name
+        if ($item.PSIsContainer) {
+            if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
+            Copy-LauncherPayloadToInstallDir -SourceDir $item.FullName -DestDir $dest
+        } else {
+            try { if (Test-Path $dest) { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } } catch {}
+            Copy-Item $item.FullName $dest -Force
+            Write-Log "Azurirano: $($item.Name) ($DestDir)"
+        }
+    }
+}
+
+function Start-LauncherFromInstallDir {
+    param([string]$InstallDir)
+    $bat = Join-Path $InstallDir 'Pokreni SR Manager.bat'
+    $vbs = Join-Path $InstallDir 'SR Manager.vbs'
+    $ps1 = Join-Path $InstallDir 'SlavonskaRavnica.ps1'
+    if (Test-Path $bat) {
+        Start-Process -FilePath $bat -WorkingDirectory $InstallDir
+        return
+    }
+    if (Test-Path $vbs) {
+        Start-Process -FilePath 'wscript.exe' -ArgumentList "`"$vbs`"" -WorkingDirectory $InstallDir
+        return
+    }
+    if (Test-Path $ps1) {
+        $args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File `"$ps1`""
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WorkingDirectory $InstallDir
+    }
+}
+
+function Apply-ZipToLatestVersion {
+    param($Version, $Notes, $ReleaseAssets, $TagName)
+    $zipUrl = Get-LauncherZipDownloadUrl -ReleaseAssets $ReleaseAssets -TagName $TagName
+    $script:LatestVersion = @{
+        version = $Version
+        url     = $zipUrl
+        notes   = $Notes
+        assets  = @(@{ name = $script:LauncherZipName; browser_download_url = $zipUrl })
+    }
+}
 
 function Check-ForUpdate {
     $headers = @{ "User-Agent" = "SlavonskaRavnica-Launcher" }
@@ -719,16 +1667,9 @@ function Check-ForUpdate {
             Write-Log "Provjeravam update (bot): $url"
             $latest = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 10
             if ($latest -and $latest.version -and $latest.version -ne $script:AppVersion) {
-                # Koristi downloadUrl od bota koji pokazuje na GitHub release
-                $dlUrl = if ($latest.downloadUrl) { $latest.downloadUrl } else { "https://github.com/$($script:UpdateGitHubRepo)/releases/latest" }
-                $script:LatestVersion = @{
-                    version = $latest.version
-                    url     = $dlUrl
-                    notes   = $latest.notes
-                    assets  = @(@{ name = $latest.file; browser_download_url = $dlUrl })
-                    sha256  = $latest.sha256
-                }
-                Write-Log "Nova verzija (bot): v$($latest.version) | Lokalna: v$($script:AppVersion)"
+                $tag = if ($latest.version -match '^v') { $latest.version } else { "v$($latest.version)" }
+                Apply-ZipToLatestVersion -Version $latest.version -Notes $latest.notes -TagName $tag
+                Write-Log "Nova verzija (bot): v$($latest.version) | ZIP: $($script:LatestVersion.url)"
                 return $true
             }
             Write-Log "Aplikacija je azurna (bot endpoint)."
@@ -745,13 +1686,8 @@ function Check-ForUpdate {
         $release = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 10
         $remoteVersion = $release.tag_name -replace '^v',''
         if ($remoteVersion -and $remoteVersion -ne $script:AppVersion) {
-            $script:LatestVersion = @{
-                version = $remoteVersion
-                url     = $release.html_url
-                notes   = $release.body
-                assets  = $release.assets
-            }
-            Write-Log "Nova verzija (GitHub): v$remoteVersion | Lokalna: v$($script:AppVersion)"
+            Apply-ZipToLatestVersion -Version $remoteVersion -Notes $release.body -ReleaseAssets $release.assets -TagName $release.tag_name
+            Write-Log "Nova verzija (GitHub): v$remoteVersion | ZIP: $($script:LatestVersion.url)"
             return $true
         }
         Write-Log "Aplikacija je azurna (GitHub)."
@@ -763,27 +1699,25 @@ function Check-ForUpdate {
 
 function Download-Update {
     if (-not $script:LatestVersion) { return }
+
+    $installDir = Get-LauncherInstallDir
+    $targetVer = [string]$script:LatestVersion.version
+    $tag = if ($targetVer -match '^v') { $targetVer } else { "v$targetVer" }
+    Write-Log "Update: ciljni folder = $installDir (trenutno v$($script:AppVersion) -> v$targetVer)"
+
     $updated = $false
+    $wc = $null
 
     try {
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add("User-Agent", "SlavonskaRavnica-Launcher")
 
-        # 1. Uvijek azuriraj .ps1 skriptu s GitHub raw-a (source of truth)
-        try {
-            $rawUrl = "https://raw.githubusercontent.com/$($script:UpdateGitHubRepo)/master/SlavonskaRavnica.ps1?nocache=$([DateTime]::UtcNow.Ticks)"
-            Write-Log "Skidam najnoviju skriptu..."
-            $ps1Content = $wc.DownloadString($rawUrl)
-            if ($ps1Content -and $ps1Content.Length -gt 1000) {
-                $dest = Join-Path $PSScriptRoot "SlavonskaRavnica.ps1"
-                try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
-                [System.IO.File]::WriteAllText($dest, $ps1Content, [System.Text.UTF8Encoding]::new($false))
-                Write-Log "Skripta azurirana."
-                $updated = $true
-            }
-        } catch { Write-Log "GRESKA ps1 download: $($_.Exception.Message)" }
+        $zipUrl = $null
+        if ($script:LatestVersion.url) { $zipUrl = [string]$script:LatestVersion.url }
+        if (-not $zipUrl) {
+            $zipUrl = Get-LauncherZipDownloadUrl -ReleaseAssets $script:LatestVersion.assets -TagName $tag
+        }
 
-        # 2. Skini release assete (.exe ili .zip) ako postoje
         $asset = $null
         if ($script:LatestVersion.assets) {
             $asset = $script:LatestVersion.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
@@ -791,56 +1725,82 @@ function Download-Update {
                 $asset = $script:LatestVersion.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1
             }
         }
+        if ($asset -and $asset.browser_download_url) { $zipUrl = [string]$asset.browser_download_url }
 
-        if ($asset -and $asset.browser_download_url) {
-            $dlUrl = $asset.browser_download_url
-            $isZip = $asset.name -like "*.zip"
-            $isExe = $asset.name -like "*.exe"
+        if ($zipUrl -and $zipUrl -like "*.zip*") {
+            $tempZip = Join-Path $env:TEMP "SlavonskaRavnica_update_$([Guid]::NewGuid().ToString('N')).zip"
+            $tempDir = Join-Path $env:TEMP "SlavonskaRavnica_update_$([Guid]::NewGuid().ToString('N'))"
+            Write-Log "Skidam ZIP: $zipUrl"
+            $wc.DownloadFile($zipUrl, $tempZip)
 
-            if ($isExe) {
-                $dest = Join-Path $PSScriptRoot "SRManager.exe"
-                try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
-                Write-Log "Skidam .exe: $dlUrl"
-                $wc.DownloadFile($dlUrl, $dest)
-                $updated = $true
-            } elseif ($isZip) {
-                $tempZip = Join-Path $env:TEMP "SlavonskaRavnica_update.zip"
-                $tempDir = Join-Path $env:TEMP "SlavonskaRavnica_update"
-                Write-Log "Skidam .zip: $dlUrl"
-                $wc.DownloadFile($dlUrl, $tempZip)
+            if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($tempZip, $tempDir)
 
-                if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
-                Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-                [System.IO.Compression.ZipFile]::ExtractToDirectory($tempZip, $tempDir)
-
-                # Zamijeni datoteke iz zipa (ne prepisuj .ps1 jer je vec azuriran gore)
-                $exe = Get-ChildItem $tempDir -Recurse -Filter "SRManager.exe" | Select-Object -First 1
-                if ($exe) {
-                    $dest = Join-Path $PSScriptRoot "SRManager.exe"
-                    try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
-                    Copy-Item $exe.FullName $dest -Force
-                }
-
-                Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
-                Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-                $updated = $true
+            $srcDir = $tempDir
+            $nested = Get-ChildItem $tempDir -Directory | Where-Object { $_.Name -eq 'SR_Manager' } | Select-Object -First 1
+            if ($nested) { $srcDir = $nested.FullName }
+            if (-not (Get-ChildItem $srcDir -File -ErrorAction SilentlyContinue)) {
+                $onlySub = Get-ChildItem $srcDir -Directory | Select-Object -First 1
+                if ($onlySub) { $srcDir = $onlySub.FullName }
             }
-        }
 
-        $wc.Dispose()
+            Copy-LauncherPayloadToInstallDir -SourceDir $srcDir -DestDir $installDir
+            Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
+            Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            $updated = $true
+        } elseif ($asset -and $asset.browser_download_url -and $asset.name -like "*.exe") {
+            $dest = Join-Path $installDir "SRManager.exe"
+            try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
+            Write-Log "Skidam .exe: $($asset.browser_download_url)"
+            $wc.DownloadFile($asset.browser_download_url, $dest)
+            $updated = $true
+        } else {
+            try {
+                $rawUrl = "https://raw.githubusercontent.com/$($script:UpdateGitHubRepo)/refs/tags/$tag/SlavonskaRavnica.ps1?nocache=$([DateTime]::UtcNow.Ticks)"
+                Write-Log "ZIP nije dostupan, skidam .ps1 s taga: $rawUrl"
+                $ps1Content = $wc.DownloadString($rawUrl)
+                if ($ps1Content -and $ps1Content.Length -gt 1000) {
+                    $dest = Join-Path $installDir "SlavonskaRavnica.ps1"
+                    try { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue } catch {}
+                    [System.IO.File]::WriteAllText($dest, $ps1Content, [System.Text.UTF8Encoding]::new($false))
+                    Write-Log "Skripta azurirana s release taga."
+                    $updated = $true
+                }
+            } catch { Write-Log "GRESKA ps1 s taga: $($_.Exception.Message)" }
+        }
     } catch {
         Write-Log "GRESKA update download: $($_.Exception.Message)"
-        Start-Process $script:LatestVersion.url
+        if ($script:LatestVersion.url) { Start-Process $script:LatestVersion.url }
+        return
+    } finally {
+        if ($wc) { $wc.Dispose() }
+    }
+
+    if (-not $updated) {
+        Write-Log "Update nije uspio - otvaram stranicu releasea."
+        if ($script:LatestVersion.url) { Start-Process $script:LatestVersion.url }
         return
     }
 
-    if ($updated) {
-        Write-Log "Update zavrsen! Restartaj launcher."
-        Show-SRDialog "Nova verzija v$($script:LatestVersion.version) instalirana!`nZatvori i ponovo pokreni launcher." "Update" "Success"
-    } else {
-        Write-Log "Nema downloadable asseta, otvaram browser..."
-        Start-Process $script:LatestVersion.url
+    $ps1Path = Join-Path $installDir 'SlavonskaRavnica.ps1'
+    $installedVer = Sync-AppVersionFromScript -Path $ps1Path
+    Update-AppVersionDisplay
+    Write-Log "Update zavrsen u: $installDir | verzija u datoteci: v$installedVer"
+
+    if ($targetVer -and $installedVer -and $installedVer -ne $targetVer) {
+        Write-Log "UPOZORENJE: ocekivano v$targetVer, u ps1 je v$installedVer - provjeri GitHub release ZIP."
     }
+
+    $showVer = if ($installedVer) { $installedVer } else { $targetVer }
+    $r = Show-SRConfirm "Nova verzija v$showVer instalirana u:`n$installDir`n`nRestartati launcher sada (preporuceno)?" "Update" "Restart" "Kasnije"
+    if ($r -eq 'Yes') {
+        Write-Log "Ponovno pokretanje iz: $installDir"
+        Start-LauncherFromInstallDir -InstallDir $installDir
+        try { $window.Close() } catch {}
+        return
+    }
+    Show-SRDialog "Update spremljen u:`n$installDir`n`nZatvori prozor i pokreni Ponovno SR Manager.bat iz istog foldera." "Update" "Success"
 }
 
 # ============================================================
@@ -968,24 +1928,26 @@ function Sync-SharedConfig {
     return $true
 }
 
-$script:Config = Load-Config
-# Normaliziraj githubRepo - izvuci owner/repo iz URL-a ako treba
-if ($script:Config.githubRepo) {
-    $repo = $script:Config.githubRepo -replace '^https?://github\.com/','' -replace '/$',''
-    $script:GitHubRepo = $repo
-}
-if (-not $script:Config.gamePath) {
-    $detected = Find-GamePath
-    if ($detected) { $script:Config.gamePath = $detected; Save-Config }
-}
-if (-not $script:Config.modsPath) {
-    $detected = Find-ModsPath
-    if ($detected) { $script:Config.modsPath = $detected; Save-Config }
-}
+# Config + game paths: inicijalizira se na splash ekranu (brzi start)
 
 # ============================================================
 # SERVER COMMUNICATION
 # ============================================================
+function Initialize-LauncherConfig {
+    $script:Config = Load-Config
+    if ($script:Config.githubRepo) {
+        $repo = $script:Config.githubRepo -replace '^https?://github\.com/','' -replace '/$',''
+        $script:GitHubRepo = $repo
+    }
+    if (-not $script:Config.gamePath) {
+        $detected = Find-GamePath
+        if ($detected) { $script:Config.gamePath = $detected; Save-Config }
+    }
+    if (-not $script:Config.modsPath) {
+        $detected = Find-ModsPath
+        if ($detected) { $script:Config.modsPath = $detected; Save-Config }
+    }
+}
 function Get-ActiveServer {
     $idx = [Math]::Max(0, [Math]::Min([int]$script:Config.activeServer, $script:Config.servers.Count - 1))
     return $script:Config.servers[$idx]
@@ -1055,10 +2017,12 @@ function Get-ServerStatus {
 }
 
 function Get-ServerModList {
+    $script:ModListSource = 'html'
     # Try authoritative bot manifest first (includes SHA-256 hashes).
     try {
         $manifest = Get-ModManifestFromBot
         if ($manifest -and $manifest.Count -gt 0) {
+            $script:ModListSource = 'bot-sha256'
             $server = Get-ActiveServer
             # Attach download URLs derived from the active server's web mod list.
             foreach ($m in $manifest) {
@@ -1131,6 +2095,7 @@ function Get-LogoBase64 {
 # SPLASH / LOADING SCREEN
 # ============================================================
 function Show-SplashScreen {
+    Close-EarlySplash
     $splash = New-Object System.Windows.Window
     $splash.WindowStyle = "None"
     $splash.AllowsTransparency = $true
@@ -1231,71 +2196,34 @@ function Update-Splash {
     } catch {}
 }
 
-# Show splash and preload
-$splashWin = Show-SplashScreen
+function Invoke-SplashPump {
+    try {
+        if ($script:SplashWindow) {
+            $script:SplashWindow.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
+        }
+    } catch {}
+}
 
-# Use a timer to run preloading steps after splash is shown
-$script:SplashStep = 0
+function Set-SplashStep {
+    param([string]$Message, [int]$Percent)
+    Update-Splash -msg $Message -pct $Percent
+    Invoke-SplashPump
+}
+
+function Close-StartupSplash {
+    try {
+        if ($script:SplashWindow) {
+            $script:SplashWindow.Close()
+            $script:SplashWindow = $null
+        }
+    } catch {}
+    Close-EarlySplash
+}
+
 $script:PreloadedServerStatus = $null
 $script:PreloadedModList = $null
-
-$splashTimer = New-Object System.Windows.Threading.DispatcherTimer
-$splashTimer.Interval = [TimeSpan]::FromMilliseconds(200)
-$splashTimer.Add_Tick({
-    switch ($script:SplashStep) {
-        0 {
-            Update-Splash "Sync konfiguracije..." 5
-            try { Sync-SharedConfig } catch {}
-            $script:SplashStep = 1
-        }
-        1 {
-            Update-Splash "Provjeravam konfiguraciju..." 15
-            $script:SplashStep = 2
-        }
-        2 {
-            Update-Splash "Provjeravam update..." 25
-            try {
-                $hasUpdate = Check-ForUpdate
-                if ($hasUpdate) {
-                    Update-Splash "Nova verzija v$($script:LatestVersion.version) dostupna!" 30
-                }
-            } catch {}
-            $script:SplashStep = 3
-        }
-        3 {
-            Update-Splash "Provjeravam server status..." 45
-            try {
-                $script:PreloadedServerStatus = Get-ServerStatus
-            } catch {}
-            $script:SplashStep = 4
-        }
-        4 {
-            Update-Splash "Ucitavam listu modova..." 65
-            try {
-                $script:PreloadedModList = Get-ServerModList
-            } catch {}
-            $script:SplashStep = 5
-        }
-        5 {
-            Update-Splash "Ucitavam postavke igre..." 85
-            try {
-                $script:PreloadedGameSettings = Read-GameSettings
-            } catch { $script:PreloadedGameSettings = @{ introScene = $true; devConsole = $false } }
-            $script:SplashStep = 6
-        }
-        6 {
-            Update-Splash "Spreman!" 100
-            $script:SplashStep = 7
-        }
-        7 {
-            $splashTimer.Stop()
-            $script:SplashWindow.Close()
-        }
-    }
-})
-
-$splashWin.Add_ContentRendered({ $splashTimer.Start() })
-$splashWin.ShowDialog() | Out-Null
+$script:PreloadedGameSettings = $null
+$script:PreloadedLocalModCount = $null
 
 # ============================================================
 # XAML UI
@@ -1761,6 +2689,30 @@ $splashWin.ShowDialog() | Out-Null
             </Setter>
         </Style>
 
+        <Style x:Key="NavSection" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="9"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="#555"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="Margin" Value="14,8,0,4"/>
+        </Style>
+
+        <Style x:Key="ModCardListItem" TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0,0,10,10"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <ContentPresenter/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- ContextMenu / MenuItem dark style (uklanja bijele kvadratice za icon column) -->
         <Style TargetType="ContextMenu">
             <Setter Property="Background" Value="#161616"/>
@@ -1970,6 +2922,13 @@ $splashWin.ShowDialog() | Out-Null
                                 Content="&#xE8BD;" ToolTip="Otvori Discord server"/>
                         <Button x:Name="btnUpdateNotify" Content="Nova verzija!" Visibility="Collapsed"
                                 Style="{StaticResource BtnUpdate}" Margin="0,0,12,0"/>
+                        <Border x:Name="licenseBadge" Visibility="Collapsed" CornerRadius="4"
+                                Background="#13301f" BorderBrush="#30A46C" BorderThickness="1"
+                                Padding="8,3" Margin="0,0,10,0" VerticalAlignment="Center"
+                                ToolTip="Licenca aktivirana na ovom racunalu">
+                            <TextBlock x:Name="txtLicenseBadge" Text="LICENCA" FontSize="9"
+                                       FontWeight="Bold" Foreground="#30A46C" FontFamily="Segoe UI"/>
+                        </Border>
                         <Ellipse x:Name="statusDot" Width="8" Height="8" Fill="#E5484D" Margin="0,0,6,0"/>
                         <TextBlock x:Name="txtStatus" Text="OFFLINE" FontSize="10"
                                    FontWeight="Bold" Foreground="#E5484D" Margin="0,0,16,0"
@@ -1985,7 +2944,7 @@ $splashWin.ShowDialog() | Out-Null
             <!-- CONTENT -->
             <Grid Grid.Row="1">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200"/>
+                    <ColumnDefinition Width="218"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
@@ -2015,12 +2974,28 @@ $splashWin.ShowDialog() | Out-Null
 
                         <!-- Nav -->
                         <StackPanel DockPanel.Dock="Top" Margin="8,0">
-                            <RadioButton x:Name="navDash" Content="Dashboard"
+                            <TextBlock Text="RADNI PROSTOR" Style="{StaticResource NavSection}"/>
+                            <RadioButton x:Name="navDash" Content="Nadzorna ploca"
                                          Style="{StaticResource NavBtn}" IsChecked="True" GroupName="nav"
-                                         ToolTip="Pregled servera, statistika modova"/>
-                            <RadioButton x:Name="navMods" Content="Modovi"
+                                         ToolTip="Status servera, igraci, brzi ulaz u igru"/>
+                            <RadioButton x:Name="navMods" Content="Upravitelj modova"
                                          Style="{StaticResource NavBtn}" GroupName="nav"
-                                         ToolTip="Lista modova, pretraga, brisanje, download"/>
+                                         ToolTip="Grid modova, pretraga, sync i download"/>
+                            <RadioButton x:Name="navIgra" Content="Savegame"
+                                         Style="{StaticResource NavBtn}" GroupName="nav"
+                                         ToolTip="Savegame slotovi i mod profili (FS25)"/>
+                            <TextBlock Text="BIBLIOTEKA" Style="{StaticResource NavSection}" Margin="14,14,0,4"/>
+                            <Button x:Name="btnNavLibraryMods" Content="Katalog modova"
+                                    Style="{StaticResource BtnFlat}" HorizontalContentAlignment="Left"
+                                    Foreground="#888" Margin="8,0,8,2" Padding="18,10"
+                                    ToolTip="Isti pregled kao Upravitelj modova"/>
+                            <Button Content="Mape (uskoro)" Style="{StaticResource BtnFlat}"
+                                    HorizontalContentAlignment="Left" Foreground="#444"
+                                    Margin="8,0,8,2" Padding="18,8" IsEnabled="False"/>
+                            <Button Content="Vozila (uskoro)" Style="{StaticResource BtnFlat}"
+                                    HorizontalContentAlignment="Left" Foreground="#444"
+                                    Margin="8,0,8,6" Padding="18,8" IsEnabled="False"/>
+                            <Border Height="1" Background="#1a1a1a" Margin="12,4,12,8"/>
                             <RadioButton x:Name="navSettings" Content="Postavke"
                                          Style="{StaticResource NavBtn}" GroupName="nav"
                                          ToolTip="Putanje igre, intro, teme, sync interval"/>
@@ -2075,7 +3050,7 @@ $splashWin.ShowDialog() | Out-Null
                                 <StackPanel>
                                     <TextBlock Text="Dashboard" FontSize="26" FontWeight="Bold"
                                                Foreground="#f0f0f0" FontFamily="Segoe UI"/>
-                                    <TextBlock Text="Pregled servera, modova i brzi launch"
+                                    <TextBlock Text="Vise servera, SHA sync modova, licenca i brzi launch"
                                                FontSize="12" Foreground="#666"
                                                FontFamily="Segoe UI" Margin="0,4,0,0"/>
                                 </StackPanel>
@@ -2283,7 +3258,7 @@ $splashWin.ShowDialog() | Out-Null
                                         <StackPanel VerticalAlignment="Center">
                                             <TextBlock Text="BRZI LAUNCH" FontSize="9" Foreground="#666"
                                                        FontWeight="Bold" Margin="0,0,0,6" FontFamily="Segoe UI"/>
-                                            <TextBlock Text="Sync modove i pokreni igru" FontSize="11"
+                                            <TextBlock Text="Provjera SHA-256, sync modova i pokretanje FS25" FontSize="11"
                                                        Foreground="#888" FontFamily="Segoe UI" Margin="0,0,0,12"
                                                        TextWrapping="Wrap"/>
                                             <Button x:Name="btnJoinServer" Content="Udi na Server"
@@ -2405,6 +3380,7 @@ $splashWin.ShowDialog() | Out-Null
                                                     <Border Background="#0d0d0d" CornerRadius="6"
                                                             Padding="10,7" Margin="0,0,0,4"
                                                             BorderBrush="#2a1a08" BorderThickness="1"
+                                                            ToolTip="{Binding ToolTipText}"
                                                             RenderTransformOrigin="0,0.5">
                                                         <Border.RenderTransform>
                                                             <TranslateTransform X="-20"/>
@@ -2559,9 +3535,9 @@ $splashWin.ShowDialog() | Out-Null
 
                         <Grid Grid.Row="0" Margin="0,0,0,18">
                             <StackPanel>
-                                <TextBlock Text="Modovi" FontSize="26" FontWeight="Bold"
+                                <TextBlock Text="Upravitelj modova" FontSize="26" FontWeight="Bold"
                                            Foreground="#f0f0f0" FontFamily="Segoe UI"/>
-                                <TextBlock x:Name="txtModSubtitle" Text="Lista, pretraga i sync sa serverom"
+                                <TextBlock x:Name="txtModSubtitle" Text="Grid, pretraga i sync sa serverom"
                                            FontSize="12" Foreground="#666"
                                            FontFamily="Segoe UI" Margin="0,4,0,0"/>
                             </StackPanel>
@@ -2638,6 +3614,9 @@ $splashWin.ShowDialog() | Out-Null
                                     <Button x:Name="btnRefreshMods" Content="Osvjezi"
                                             Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
                                             ToolTip="Provjeri server modove i usporedi sa lokalnim"/>
+                                    <Button x:Name="btnRescanMods" Content="Ponovno skeniraj"
+                                            Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                                            ToolTip="Prisilno osvjezi manifest sa servera (bot ili mods.html)"/>
                                     <Button x:Name="btnDownloadMissing" Content="Skini Sve Sto Fali"
                                             Style="{StaticResource BtnPrimary}" Margin="0,0,8,0"
                                             ToolTip="Skini sve mod-ove sa statusom FALI ili ZASTARIO"/>
@@ -2665,124 +3644,171 @@ $splashWin.ShowDialog() | Out-Null
                                     </Grid>
                                 </Border>
 
-                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
-                                            Orientation="Horizontal" Margin="0,12,0,0">
-                                    <RadioButton x:Name="filterAll" Content="Svi" GroupName="modFilter"
-                                                 Style="{StaticResource BtnFilter}" IsChecked="True" Margin="0,0,6,0"/>
-                                    <RadioButton x:Name="filterServer" Content="Server" GroupName="modFilter"
-                                                 Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                    <RadioButton x:Name="filterMissing" Content="Fali" GroupName="modFilter"
-                                                 Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                    <RadioButton x:Name="filterExtra" Content="Extra" GroupName="modFilter"
-                                                 Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                    <RadioButton x:Name="filterLocal" Content="Lokalno" GroupName="modFilter"
-                                                 Style="{StaticResource BtnFilter}"/>
+                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,12,0,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="filterAll" Content="Svi" GroupName="modFilter"
+                                                     Style="{StaticResource BtnFilter}" IsChecked="True" Margin="0,0,6,0"/>
+                                        <RadioButton x:Name="filterServer" Content="Server" GroupName="modFilter"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
+                                        <RadioButton x:Name="filterMissing" Content="Fali" GroupName="modFilter"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
+                                        <RadioButton x:Name="filterExtra" Content="Extra" GroupName="modFilter"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
+                                        <RadioButton x:Name="filterLocal" Content="Lokalno" GroupName="modFilter"
+                                                     Style="{StaticResource BtnFilter}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <TextBlock Text="SHOW:" FontSize="10" Foreground="#666" FontWeight="Bold"
+                                                   VerticalAlignment="Center" Margin="0,0,10,0" FontFamily="Segoe UI"/>
+                                        <RadioButton x:Name="catAll" Content="Svi modovi" GroupName="modCatFilter"
+                                                     Style="{StaticResource BtnFilter}" IsChecked="True" Margin="0,0,6,0"/>
+                                        <RadioButton x:Name="catVehicle" Content="Vehicle" GroupName="modCatFilter"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
+                                        <RadioButton x:Name="catPlaceable" Content="Placeable" GroupName="modCatFilter"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
+                                        <RadioButton x:Name="catMap" Content="Map" GroupName="modCatFilter"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
+                                        <RadioButton x:Name="catScript" Content="Script" GroupName="modCatFilter"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
+                                        <RadioButton x:Name="catAnimal" Content="Animal" GroupName="modCatFilter"
+                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
+                                        <RadioButton x:Name="catOther" Content="Other" GroupName="modCatFilter"
+                                                     Style="{StaticResource BtnFilter}"/>
+                                    </StackPanel>
                                 </StackPanel>
                             </Grid>
                         </Border>
 
                         <Border Grid.Row="3" Background="#101010" CornerRadius="10"
-                                BorderBrush="#222" BorderThickness="1">
-                            <ListView x:Name="lstMods" Background="Transparent" Foreground="#ddd"
-                                      BorderThickness="0" FontSize="13" FontFamily="Segoe UI" Margin="4"
-                                      ScrollViewer.IsDeferredScrollingEnabled="True"
-                                      VirtualizingStackPanel.IsVirtualizing="True"
-                                      VirtualizingStackPanel.VirtualizationMode="Recycling"
-                                      ScrollViewer.CanContentScroll="True">
-                                <ListView.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <VirtualizingStackPanel/>
-                                    </ItemsPanelTemplate>
-                                </ListView.ItemsPanel>
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="Status" Width="100">
-                                            <GridViewColumn.CellTemplate>
-                                                <DataTemplate>
-                                                    <Border CornerRadius="4" Padding="8,3" HorizontalAlignment="Left">
-                                                        <Border.Style>
-                                                            <Style TargetType="Border">
-                                                                <Setter Property="Background" Value="#222"/>
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding Status}" Value="OK">
-                                                                        <Setter Property="Background" Value="#13301f"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding Status}" Value="FALI">
-                                                                        <Setter Property="Background" Value="#3a1414"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding Status}" Value="ZASTARIO">
-                                                                        <Setter Property="Background" Value="#3a2a08"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding Status}" Value="Extra">
-                                                                        <Setter Property="Background" Value="#1a1a2a"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding Status}" Value="Lokalno">
-                                                                        <Setter Property="Background" Value="#222"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Border.Style>
-                                                        <TextBlock Text="{Binding Status}" FontSize="11" FontWeight="SemiBold">
-                                                            <TextBlock.Style>
-                                                                <Style TargetType="TextBlock">
-                                                                    <Setter Property="Foreground" Value="#aaa"/>
-                                                                    <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding Status}" Value="OK">
-                                                                            <Setter Property="Foreground" Value="#30A46C"/>
-                                                                        </DataTrigger>
-                                                                        <DataTrigger Binding="{Binding Status}" Value="FALI">
-                                                                            <Setter Property="Foreground" Value="#E5484D"/>
-                                                                        </DataTrigger>
-                                                                        <DataTrigger Binding="{Binding Status}" Value="ZASTARIO">
-                                                                            <Setter Property="Foreground" Value="#F5C518"/>
-                                                                        </DataTrigger>
-                                                                        <DataTrigger Binding="{Binding Status}" Value="Extra">
-                                                                            <Setter Property="Foreground" Value="#9d8df5"/>
-                                                                        </DataTrigger>
-                                                                    </Style.Triggers>
-                                                                </Style>
-                                                            </TextBlock.Style>
-                                                        </TextBlock>
+                                BorderBrush="#222" BorderThickness="1" Padding="8">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <ListBox x:Name="lstMods" Background="Transparent" Foreground="#ddd"
+                                         BorderThickness="0" FontFamily="Segoe UI"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                         ItemContainerStyle="{StaticResource ModCardListItem}">
+                                    <ListBox.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal"/>
+                                        </ItemsPanelTemplate>
+                                    </ListBox.ItemsPanel>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Width="168" MinHeight="200" CornerRadius="10"
+                                                    Background="#161616" BorderBrush="#2a2a2a" BorderThickness="1"
+                                                    Padding="0" Cursor="Hand"
+                                                    ToolTip="{Binding ToolTipText}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=IsSelected}" Value="True">
+                                                                <Setter Property="BorderBrush" Value="{StaticResource Gold}"/>
+                                                                <Setter Property="Background" Value="#1a1408"/>
+                                                            </DataTrigger>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter Property="BorderBrush" Value="#3a2e10"/>
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <StackPanel>
+                                                    <Border Height="88" CornerRadius="10,10,0,0" Background="#0d0d0d" ClipToBounds="True">
+                                                        <Grid>
+                                                            <Image Stretch="UniformToFill"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                                <Image.Style>
+                                                                    <Style TargetType="Image">
+                                                                        <Setter Property="Source" Value="{Binding ThumbSource}"/>
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding HasThumb}" Value="True">
+                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Image.Style>
+                                                            </Image>
+                                                            <Ellipse Width="52" Height="52" HorizontalAlignment="Center"
+                                                                     VerticalAlignment="Center">
+                                                                <Ellipse.Style>
+                                                                    <Style TargetType="Ellipse">
+                                                                        <Setter Property="Fill">
+                                                                            <Setter.Value>
+                                                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                                                    <GradientStop Color="#2a2208" Offset="0"/>
+                                                                                    <GradientStop Color="#1a1408" Offset="1"/>
+                                                                                </LinearGradientBrush>
+                                                                            </Setter.Value>
+                                                                        </Setter>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding HasThumb}" Value="True">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Ellipse.Style>
+                                                            </Ellipse>
+                                                            <TextBlock Text="{Binding Initial}" FontSize="26" FontWeight="Bold"
+                                                                       Foreground="{StaticResource Gold}" HorizontalAlignment="Center"
+                                                                       VerticalAlignment="Center" FontFamily="Segoe UI">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding HasThumb}" Value="True">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                            <TextBlock Text="&#x26A0;" FontSize="16" FontWeight="Bold"
+                                                                       HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                                       Margin="0,8,10,0" Foreground="#E5484D">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding Status}" Value="FALI">
+                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding Status}" Value="ZASTARIO">
+                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                                <Setter Property="Foreground" Value="#F5C518"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                        </Grid>
                                                     </Border>
-                                                </DataTemplate>
-                                            </GridViewColumn.CellTemplate>
-                                        </GridViewColumn>
-                                        <GridViewColumn Header="Mod" Width="320"
-                                            DisplayMemberBinding="{Binding Name}"/>
-                                        <GridViewColumn Header="Lokalno" Width="80"
-                                            DisplayMemberBinding="{Binding Local}"/>
-                                        <GridViewColumn Header="Server" Width="100"
-                                            DisplayMemberBinding="{Binding Server}"/>
-                                        <GridViewColumn Header="Velicina" Width="90"
-                                            DisplayMemberBinding="{Binding Size}"/>
-                                    </GridView>
-                                </ListView.View>
-                                <ListView.ItemContainerStyle>
-                                    <Style TargetType="ListViewItem" BasedOn="{StaticResource {x:Type ListViewItem}}">
-                                        <Setter Property="ToolTipService.InitialShowDelay" Value="900"/>
-                                        <Setter Property="ToolTipService.BetweenShowDelay" Value="2000"/>
-                                        <Setter Property="ToolTipService.ShowOnDisabled" Value="False"/>
-                                        <Setter Property="ToolTip">
-                                            <Setter.Value>
-                                                <MultiBinding StringFormat="{}{0}&#x0a;Status: {1}  |  Lokalno: {2}  |  Server: {3}  |  Velicina: {4}">
-                                                    <Binding Path="Name"/>
-                                                    <Binding Path="Status"/>
-                                                    <Binding Path="Local"/>
-                                                    <Binding Path="Server"/>
-                                                    <Binding Path="Size"/>
-                                                </MultiBinding>
-                                            </Setter.Value>
-                                        </Setter>
-                                    </Style>
-                                </ListView.ItemContainerStyle>
-                                <ListView.ContextMenu>
-                                    <ContextMenu Background="#161616" Foreground="#eee" BorderBrush="#333">
-                                        <MenuItem x:Name="ctxDeleteMod" Header="Obrisi mod" Foreground="#E5484D"/>
-                                        <MenuItem x:Name="ctxOpenInExplorer" Header="Pokazi u Exploreru"/>
-                                        <MenuItem x:Name="ctxCopyName" Header="Kopiraj ime"/>
-                                    </ContextMenu>
-                                </ListView.ContextMenu>
-                            </ListView>
+                                                    <StackPanel Margin="12,10,12,12">
+                                                        <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold"
+                                                                   Foreground="#eee" TextTrimming="CharacterEllipsis"
+                                                                   MaxWidth="144" FontFamily="Segoe UI"/>
+                                                        <TextBlock Text="{Binding Version}" FontSize="10" Foreground="#888"
+                                                                   Margin="0,4,0,0" FontFamily="Segoe UI"/>
+                                                        <Border CornerRadius="4" Padding="6,2" Margin="0,8,0,0"
+                                                                HorizontalAlignment="Left" Background="#222">
+                                                            <TextBlock Text="{Binding Category}" FontSize="9"
+                                                                       Foreground="#aaa" FontFamily="Segoe UI"/>
+                                                        </Border>
+                                                        <TextBlock Text="{Binding Size}" FontSize="9" Foreground="#555"
+                                                                   Margin="0,6,0,0" FontFamily="Segoe UI"/>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu Background="#161616" Foreground="#eee" BorderBrush="#333">
+                                            <MenuItem x:Name="ctxDeleteMod" Header="Obrisi mod" Foreground="#E5484D"/>
+                                            <MenuItem x:Name="ctxOpenInExplorer" Header="Pokazi u Exploreru"/>
+                                            <MenuItem x:Name="ctxCopyName" Header="Kopiraj ime"/>
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                </ListBox>
+                            </ScrollViewer>
                         </Border>
 
                         <Border Grid.Row="4" Background="#141414" CornerRadius="8"
@@ -2793,12 +3819,129 @@ $splashWin.ShowDialog() | Out-Null
                         </Border>
                     </Grid>
 
+                    <!-- PAGE: IGRA (savegame + mod profili) -->
+                    <ScrollViewer x:Name="pageIgra" Visibility="Collapsed"
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="32,28,32,32" MaxWidth="900">
+
+                            <StackPanel Margin="0,0,0,18">
+                                <TextBlock Text="Savegame i profili" FontSize="26" FontWeight="Bold"
+                                           Foreground="#f0f0f0" FontFamily="Segoe UI"/>
+                                <TextBlock Text="Pregled FS25 save slotova i mod profila po serveru (bez izmjene save datoteka)"
+                                           FontSize="12" Foreground="#666" FontFamily="Segoe UI" Margin="0,4,0,0"
+                                           TextWrapping="Wrap"/>
+                            </StackPanel>
+
+                            <Border Background="#161616" CornerRadius="10" Padding="20"
+                                    Margin="0,0,0,14" BorderBrush="#222" BorderThickness="1">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,10">
+                                        <TextBlock Text="Mod profili" FontSize="15" FontWeight="SemiBold"
+                                                   Foreground="#F5C518" FontFamily="Segoe UI"/>
+                                        <Button x:Name="btnRefreshModProfiles" Content="Osvjezi"
+                                                Style="{StaticResource BtnGhost}" HorizontalAlignment="Right"
+                                                VerticalAlignment="Center" Padding="16,8"/>
+                                    </Grid>
+                                    <TextBlock Text="JSON u AppData - po serveru (sync mod foldera pri launchu kasnije)"
+                                               FontSize="11" Foreground="#666" FontFamily="Segoe UI"
+                                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <ComboBox x:Name="cmbModProfiles"
+                                              Background="#1a1a1a" Foreground="#eee"
+                                              BorderBrush="#333" Padding="10,8" FontFamily="Segoe UI"/>
+                                    <TextBlock x:Name="txtModProfilePath" Text="" FontSize="10"
+                                               Foreground="#555" FontFamily="Segoe UI" Margin="0,8,0,0"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#161616" CornerRadius="10" Padding="20"
+                                    Margin="0,0,0,14" BorderBrush="#222" BorderThickness="1">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,8">
+                                        <TextBlock Text="Savegame slotovi (FS25)" FontSize="15"
+                                                   FontWeight="SemiBold" Foreground="#F5C518" FontFamily="Segoe UI"/>
+                                        <Button x:Name="btnRefreshSavegames" Content="Osvjezi savegame"
+                                                Style="{StaticResource BtnGhost}" HorizontalAlignment="Right"
+                                                VerticalAlignment="Center" Padding="16,8"/>
+                                    </Grid>
+                                    <TextBlock x:Name="txtIgraSavePath" Text="-"
+                                               FontSize="10" Foreground="#888" FontFamily="Segoe UI"
+                                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <Border Background="#111" CornerRadius="8" BorderBrush="#1a1a1a"
+                                            BorderThickness="1" MaxHeight="320">
+                                        <ListView x:Name="lstSavegames" Background="Transparent"
+                                                  BorderThickness="0" Foreground="#ddd" FontFamily="Segoe UI"
+                                                  ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                            <ListView.View>
+                                                <GridView>
+                                                    <GridViewColumn Header="Slot" Width="44"
+                                                                    DisplayMemberBinding="{Binding Slot}"/>
+                                                    <GridViewColumn Header="Ime" Width="130"
+                                                                    DisplayMemberBinding="{Binding Name}"/>
+                                                    <GridViewColumn Header="Mapa" Width="110"
+                                                                    DisplayMemberBinding="{Binding MapTitle}"/>
+                                                    <GridViewColumn Header="Novac" Width="80"
+                                                                    DisplayMemberBinding="{Binding Money}"/>
+                                                    <GridViewColumn Header="Sati" Width="64"
+                                                                    DisplayMemberBinding="{Binding PlayTime}"/>
+                                                    <GridViewColumn Header="MB" Width="44"
+                                                                    DisplayMemberBinding="{Binding SizeMb}"/>
+                                                    <GridViewColumn Header="Izmjena" Width="110"
+                                                                    DisplayMemberBinding="{Binding LastWrite}"/>
+                                                </GridView>
+                                            </ListView.View>
+                                        </ListView>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <Grid Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="txtIgraSaveHint" Grid.Column="0" VerticalAlignment="Center"
+                                           FontSize="11" Foreground="#666" FontFamily="Segoe UI" TextWrapping="Wrap"
+                                           Margin="0,0,12,0"/>
+                                <Button x:Name="btnOpenSaveSlot" Grid.Column="1" Content="Otvori slot u Exploreru"
+                                        Style="{StaticResource BtnPrimary}" Padding="20,10"
+                                        ToolTip="Otvara odabrani savegame folder (bez izmjene datoteka)"/>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+
                     <!-- PAGE: POSTAVKE -->
                     <ScrollViewer x:Name="pageSettings" Visibility="Collapsed"
                                   VerticalScrollBarVisibility="Auto">
                         <StackPanel Margin="28,24">
                             <TextBlock Text="Postavke" FontSize="22" FontWeight="Bold"
                                        Foreground="#f0f0f0" FontFamily="Segoe UI" Margin="0,0,0,20"/>
+
+                            <!-- Licenca (SR-only vs generic hub launcheri) -->
+                            <Border Background="#161616" CornerRadius="10" Padding="24"
+                                    Margin="0,0,0,16" BorderBrush="#3a2e10" BorderThickness="1">
+                                <StackPanel>
+                                    <TextBlock Text="Licenca i racunalo" FontSize="15" FontWeight="SemiBold"
+                                               Foreground="#F5C518" Margin="0,0,0,12" FontFamily="Segoe UI"/>
+                                    <TextBlock x:Name="txtLicenseStatus" Text="Ucitavam..."
+                                               FontSize="13" Foreground="#ddd" FontFamily="Segoe UI"
+                                               TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="txtLicenseExpiry" Text=""
+                                               FontSize="11" Foreground="#888" FontFamily="Segoe UI"
+                                               Margin="0,0,0,10"/>
+                                    <TextBlock x:Name="txtHwidShort" Text="HWID: -"
+                                               FontSize="10" Foreground="#555" FontFamily="Consolas"
+                                               Margin="0,0,0,12"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button x:Name="btnCopyHwid" Content="Kopiraj HWID"
+                                                Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                                                ToolTip="Kopiraj HWID u clipboard (za podrsku / aktivaciju)"/>
+                                        <Button x:Name="btnChangeLicense" Content="Promijeni licencu"
+                                                Style="{StaticResource BtnFlat}" Foreground="#F5C518"
+                                                ToolTip="Ponovo unesi ili aktiviraj licencni kljuc"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
 
                             <!-- Player Settings -->
                             <Border Background="#161616" CornerRadius="10" Padding="24"
@@ -3019,7 +4162,7 @@ $splashWin.ShowDialog() | Out-Null
                                         <StackPanel Grid.Column="0">
                                             <TextBlock Text="Provjera mod velicine" FontSize="13"
                                                        Foreground="#ddd" FontFamily="Segoe UI"/>
-                                            <TextBlock Text="Detektira ZASTARJELE mod-ove (sporije refresh)"
+                                            <TextBlock Text="Fallback kad nema SHA manifesta; s bot API-jem koristi se SHA-256"
                                                        FontSize="11" Foreground="#666" FontFamily="Segoe UI"
                                                        Margin="0,2,0,0"/>
                                         </StackPanel>
@@ -3027,6 +4170,26 @@ $splashWin.ShowDialog() | Out-Null
                                                   Style="{StaticResource ToggleSwitch}"
                                                   VerticalAlignment="Center" IsChecked="True"/>
                                     </Grid>
+
+                                    <Grid Margin="0,0,0,14">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="Vodic za pocetak" FontSize="13"
+                                                       Foreground="#ddd" FontFamily="Segoe UI"/>
+                                            <TextBlock Text="Ne prikazuj overlay pri svakom pokretanju"
+                                                       FontSize="11" Foreground="#666" FontFamily="Segoe UI"
+                                                       Margin="0,2,0,0"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="chkHideWalkthrough" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <Button x:Name="btnShowWalkthrough" Content="Pokazi vodic ponovo"
+                                            Style="{StaticResource BtnGhost}" HorizontalAlignment="Left"
+                                            Margin="0,0,0,14" Padding="16,8"/>
 
                                     <Button x:Name="btnSaveBehavior" Content="Spremi Postavke"
                                             Style="{StaticResource BtnPrimary}" HorizontalAlignment="Left"
@@ -3210,12 +4373,49 @@ $splashWin.ShowDialog() | Out-Null
                                 Style="{StaticResource BtnGhost}" HorizontalAlignment="Right"
                                 Margin="0,8,0,0"/>
                     </Grid>
+
+                    <!-- WALKTHROUGH OVERLAY -->
+                    <Grid x:Name="walkthroughOverlay" Visibility="Collapsed" Panel.ZIndex="800"
+                          Background="#CC000000">
+                        <Border HorizontalAlignment="Center" VerticalAlignment="Center"
+                                MaxWidth="520" MinWidth="400" Background="#121212" CornerRadius="14"
+                                BorderBrush="#F5C518" BorderThickness="1" Padding="28,26">
+                            <StackPanel>
+                                <TextBlock Text="PRVI KORACI" FontSize="9" FontWeight="Bold"
+                                           Foreground="#666" FontFamily="Segoe UI" Margin="0,0,0,6"/>
+                                <TextBlock x:Name="wtTitle" Text="Dobrodosli" FontSize="20" FontWeight="Bold"
+                                           Foreground="#F5C518" FontFamily="Segoe UI" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="wtBody" Text="" FontSize="13" Foreground="#ccc"
+                                           FontFamily="Segoe UI" TextWrapping="Wrap" Margin="0,12,0,16"
+                                           LineHeight="20"/>
+                                <ProgressBar x:Name="wtProgress" Height="4" Maximum="6" Value="1"
+                                               Background="#222" Foreground="#F5C518" BorderThickness="0"/>
+                                <TextBlock x:Name="wtStepLabel" Text="Korak 1 / 6" FontSize="10"
+                                           Foreground="#555" FontFamily="Segoe UI" Margin="0,6,0,0"/>
+                                <Grid Margin="0,20,0,0">
+                                    <CheckBox x:Name="chkWtSkipLaunch" Content="Ne prikazuj pri pokretanju"
+                                              Foreground="#888" FontSize="11" FontFamily="Segoe UI"
+                                              VerticalAlignment="Center"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Button x:Name="btnWtSkip" Content="Preskoci"
+                                                Style="{StaticResource BtnFlat}" Margin="0,0,8,0"
+                                                Foreground="#888" Padding="12,8"/>
+                                        <Button x:Name="btnWtPrev" Content="Natrag"
+                                                Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                                                Padding="14,8" Visibility="Collapsed"/>
+                                        <Button x:Name="btnWtNext" Content="Dalje"
+                                                Style="{StaticResource BtnPrimary}" Padding="18,8"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
                 </Grid>
             </Grid>
 
             <!-- BOTTOM BAR -->
             <Border Grid.Row="1" VerticalAlignment="Bottom" Background="#0d0d0d"
-                    Padding="16,8" Margin="200,0,0,0">
+                    Padding="16,8" Margin="218,0,0,0">
                 <TextBlock x:Name="txtProgress" Text="" FontSize="11"
                            Foreground="#F5C518" FontFamily="Segoe UI" HorizontalAlignment="Right"/>
             </Border>
@@ -3225,10 +4425,23 @@ $splashWin.ShowDialog() | Out-Null
 "@
 
 # ============================================================
-# CREATE WINDOW
+# CREATE WINDOW (splash ostaje otvoren do licence + preloada)
 # ============================================================
+$splashWin = Show-SplashScreen
+$splashWin.Show()
+Set-SplashStep "Ucitavam konfiguraciju..." 10
+try { Initialize-LauncherConfig } catch {}
+try { Sync-SharedConfig } catch {}
+try {
+    if ($script:Config.modsPath -and (Test-Path $script:Config.modsPath)) {
+        $script:PreloadedLocalModCount = @(Get-ChildItem $script:Config.modsPath -Filter "*.zip" -ErrorAction SilentlyContinue).Count
+    }
+} catch {}
+
+Set-SplashStep "Ucitavam sucelje..." 28
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [Windows.Markup.XamlReader]::Load($reader)
+Invoke-SplashPump
 
 # Postavi taskbar ikonu
 try {
@@ -3264,12 +4477,14 @@ $btnUpdateNow        = $window.FindName("btnUpdateNow")
 $serverButtonsPanel  = $window.FindName("serverButtonsPanel")
 $navDash             = $window.FindName("navDash")
 $navMods             = $window.FindName("navMods")
+$navIgra             = $window.FindName("navIgra")
 $navSettings         = $window.FindName("navSettings")
 $navLog              = $window.FindName("navLog")
 $btnAdminToggle      = $window.FindName("btnAdminToggle")
 $txtVersion          = $window.FindName("txtVersion")
 $pageDash            = $window.FindName("pageDash")
 $pageMods            = $window.FindName("pageMods")
+$pageIgra            = $window.FindName("pageIgra")
 $pageSettings        = $window.FindName("pageSettings")
 $pageLog             = $window.FindName("pageLog")
 $statusDotBig        = $window.FindName("statusDotBig")
@@ -3348,11 +4563,32 @@ $txtProgress         = $window.FindName("txtProgress")
 $chkIntroScene       = $window.FindName("chkIntroScene")
 $chkDevConsole       = $window.FindName("chkDevConsole")
 $btnSaveGameOptions  = $window.FindName("btnSaveGameOptions")
+$cmbModProfiles      = $window.FindName("cmbModProfiles")
+$btnRefreshModProfiles = $window.FindName("btnRefreshModProfiles")
+$txtModProfilePath   = $window.FindName("txtModProfilePath")
+$lstSavegames        = $window.FindName("lstSavegames")
+$txtIgraSavePath     = $window.FindName("txtIgraSavePath")
+$txtIgraSaveHint     = $window.FindName("txtIgraSaveHint")
+$btnRefreshSavegames = $window.FindName("btnRefreshSavegames")
+$btnOpenSaveSlot     = $window.FindName("btnOpenSaveSlot")
 $filterAll           = $window.FindName("filterAll")
 $filterServer        = $window.FindName("filterServer")
 $filterMissing       = $window.FindName("filterMissing")
 $filterExtra         = $window.FindName("filterExtra")
 $filterLocal         = $window.FindName("filterLocal")
+$btnRescanMods       = $window.FindName("btnRescanMods")
+$btnNavLibraryMods   = $window.FindName("btnNavLibraryMods")
+$walkthroughOverlay  = $window.FindName("walkthroughOverlay")
+$wtTitle             = $window.FindName("wtTitle")
+$wtBody              = $window.FindName("wtBody")
+$wtProgress          = $window.FindName("wtProgress")
+$wtStepLabel         = $window.FindName("wtStepLabel")
+$chkWtSkipLaunch     = $window.FindName("chkWtSkipLaunch")
+$btnWtSkip           = $window.FindName("btnWtSkip")
+$btnWtPrev           = $window.FindName("btnWtPrev")
+$btnWtNext           = $window.FindName("btnWtNext")
+$chkHideWalkthrough  = $window.FindName("chkHideWalkthrough")
+$btnShowWalkthrough  = $window.FindName("btnShowWalkthrough")
 
 # v1.2 dodatne kontrole
 $btnAddCustomServer  = $window.FindName("btnAddCustomServer")
@@ -3366,6 +4602,13 @@ $ctxCopyName         = $window.FindName("ctxCopyName")
 $btnExportConfig     = $window.FindName("btnExportConfig")
 $btnImportConfig     = $window.FindName("btnImportConfig")
 $toastHost           = $window.FindName("toastHost")
+$licenseBadge        = $window.FindName("licenseBadge")
+$txtLicenseBadge     = $window.FindName("txtLicenseBadge")
+$txtLicenseStatus    = $window.FindName("txtLicenseStatus")
+$txtLicenseExpiry    = $window.FindName("txtLicenseExpiry")
+$txtHwidShort        = $window.FindName("txtHwidShort")
+$btnCopyHwid         = $window.FindName("btnCopyHwid")
+$btnChangeLicense    = $window.FindName("btnChangeLicense")
 
 # ============================================================
 # LOGO
@@ -3425,12 +4668,14 @@ function Set-Page {
     param([string]$page)
     $pageDash.Visibility = 'Collapsed'
     $pageMods.Visibility = 'Collapsed'
+    $pageIgra.Visibility = 'Collapsed'
     $pageSettings.Visibility = 'Collapsed'
     $pageLog.Visibility = 'Collapsed'
     $target = $null
     switch ($page) {
         'dash'     { $pageDash.Visibility = 'Visible'; $target = $pageDash }
         'mods'     { $pageMods.Visibility = 'Visible'; $target = $pageMods }
+        'igra'     { $pageIgra.Visibility = 'Visible'; $target = $pageIgra }
         'settings' { $pageSettings.Visibility = 'Visible'; $target = $pageSettings }
         'log'      { $pageLog.Visibility = 'Visible'; $target = $pageLog }
     }
@@ -3472,13 +4717,174 @@ $navMods.Add_Checked({
         Apply-ModFilter (Get-CurrentFilter)
     }
 })
+$navIgra.Add_Checked({
+    Set-Page 'igra'
+    if ($txtModProfilePath) { $txtModProfilePath.Text = $script:ModProfilesPath }
+    Refresh-IgraPage
+})
 $navSettings.Add_Checked({
     Set-Page 'settings'
     $gs = Read-GameSettings
     $chkIntroScene.IsChecked = $gs.introScene
     $chkDevConsole.IsChecked = $gs.devConsole
+    Update-LicenseUi
 })
 $navLog.Add_Checked({ Set-Page 'log' })
+
+if ($btnRefreshSavegames) {
+    $btnRefreshSavegames.Add_Click({ Refresh-IgraPage; try { Show-Toast "Savegame lista osvjezena" "success" } catch {} })
+}
+if ($btnRefreshModProfiles) {
+    $btnRefreshModProfiles.Add_Click({
+        Ensure-ServerModProfile | Out-Null
+        Refresh-IgraPage
+        try { Show-Toast "Mod profili osvjezeni" "success" } catch {}
+    })
+}
+if ($btnOpenSaveSlot) {
+    $btnOpenSaveSlot.Add_Click({
+        $sel = $lstSavegames.SelectedItem
+        if (-not $sel -or -not $sel.Folder) {
+            Show-SRDialog "Odaberi savegame slot u listi." "Igra" "Warning"
+            return
+        }
+        if (Test-Path $sel.Folder) { Start-Process explorer.exe $sel.Folder }
+    })
+}
+if ($cmbModProfiles) {
+    $cmbModProfiles.Add_SelectionChanged({
+        $item = $cmbModProfiles.SelectedItem
+        if (-not $item) { return }
+        $store = Get-ModProfilesStore
+        $store.activeProfileId = $item.Id
+        Save-ModProfilesStore $store
+        Write-Log "Aktivni mod profil: $($item.Label) ($($item.Id))"
+    })
+}
+
+if ($btnNavLibraryMods) {
+    $btnNavLibraryMods.Add_Click({
+        $navMods.IsChecked = $true
+    })
+}
+
+# ============================================================
+# WALKTHROUGH (Getting Started)
+# ============================================================
+$script:WalkthroughSteps = @(
+    @{
+        Title = 'Dobrodosli u SR Manager'
+        Body  = "Launcher za Farming Simulator 25 community Slavonska Ravnica.`n`nOvaj vodic ce te provesti kroz osnovne korake: server, modovi, save i ulaz u igru."
+    }
+    @{
+        Title = 'Odaberi server'
+        Body  = "Na lijevoj strani odaberi SR server (gumb s imenom servera).`n`nStatus ONLINE i ping vidis na nadzornoj ploci."
+    }
+    @{
+        Title = 'Skini modove'
+        Body  = "Otvori Upravitelj modova, klikni Osvjezi ili Ponovno skeniraj, zatim Skini Sve Sto Fali.`n`nModovi se usporeduju SHA-256 hashom (bot API) kad je dostupan."
+    }
+    @{
+        Title = 'Kreiraj save u FS25'
+        Body  = "Pokreni FS25 i napravi novi savegame (karijera).`n`nU tabu Savegame vidis slotove nakon sto spremis igru - klikni Osvjezi savegame."
+    }
+    @{
+        Title = 'Pridruzi se serveru'
+        Body  = "Na Nadzornoj ploci klikni Udi na server / Pokreni igru.`n`nLauncher sinkronizira modove prije starta (ako su postavke ukljucene)."
+    }
+    @{
+        Title = 'Spremno za igru'
+        Body  = "Licenca, auto-update i postavke su u tabu Postavke.`n`nUgodnu igru na Slavonskoj Ravnici!"
+    }
+)
+$script:WalkthroughIndex = 0
+
+function Update-WalkthroughStep {
+    $idx = $script:WalkthroughIndex
+    $steps = $script:WalkthroughSteps
+    if ($idx -lt 0) { $idx = 0 }
+    if ($idx -ge $steps.Count) { $idx = $steps.Count - 1 }
+    $script:WalkthroughIndex = $idx
+    $step = $steps[$idx]
+    $wtTitle.Text = $step.Title
+    $wtBody.Text = $step.Body
+    $wtProgress.Maximum = $steps.Count
+    $wtProgress.Value = $idx + 1
+    $wtStepLabel.Text = "Korak $($idx + 1) / $($steps.Count)"
+    $btnWtPrev.Visibility = if ($idx -gt 0) { 'Visible' } else { 'Collapsed' }
+    $btnWtNext.Content = if ($idx -ge ($steps.Count - 1)) { 'Zavrsi' } else { 'Dalje' }
+    $ws = Get-WalkthroughSettings
+    if ($chkWtSkipLaunch) { $chkWtSkipLaunch.IsChecked = [bool]$ws.skipOnLaunch }
+}
+
+function Show-WalkthroughOverlay {
+    $script:WalkthroughIndex = 0
+    Update-WalkthroughStep
+    $walkthroughOverlay.Visibility = 'Visible'
+}
+
+function Hide-WalkthroughOverlay {
+    param([switch]$Completed)
+    $walkthroughOverlay.Visibility = 'Collapsed'
+    $ws = Get-WalkthroughSettings
+    if ($chkWtSkipLaunch -and $chkWtSkipLaunch.IsChecked) { $ws.skipOnLaunch = $true }
+    if ($Completed) { $ws.completed = $true; $ws.lastStep = $script:WalkthroughSteps.Count - 1 }
+    $ws.lastStep = $script:WalkthroughIndex
+    Save-WalkthroughSettings $ws
+    if ($chkHideWalkthrough) { $chkHideWalkthrough.IsChecked = [bool]$ws.skipOnLaunch }
+}
+
+if ($btnWtNext) {
+    $btnWtNext.Add_Click({
+        if ($script:WalkthroughIndex -ge ($script:WalkthroughSteps.Count - 1)) {
+            Hide-WalkthroughOverlay -Completed
+            try { Show-Toast "Vodic zavrsen - ugodnu igru!" "success" } catch {}
+        } else {
+            $script:WalkthroughIndex++
+            Update-WalkthroughStep
+        }
+    })
+}
+if ($btnWtPrev) {
+    $btnWtPrev.Add_Click({
+        if ($script:WalkthroughIndex -gt 0) {
+            $script:WalkthroughIndex--
+            Update-WalkthroughStep
+        }
+    })
+}
+if ($btnWtSkip) {
+    $btnWtSkip.Add_Click({ Hide-WalkthroughOverlay })
+}
+if ($chkWtSkipLaunch) {
+    $chkWtSkipLaunch.Add_Checked({
+        $ws = Get-WalkthroughSettings
+        $ws.skipOnLaunch = $true
+        Save-WalkthroughSettings $ws
+        if ($chkHideWalkthrough) { $chkHideWalkthrough.IsChecked = $true }
+    })
+    $chkWtSkipLaunch.Add_Unchecked({
+        $ws = Get-WalkthroughSettings
+        $ws.skipOnLaunch = $false
+        Save-WalkthroughSettings $ws
+        if ($chkHideWalkthrough) { $chkHideWalkthrough.IsChecked = $false }
+    })
+}
+if ($btnShowWalkthrough) {
+    $btnShowWalkthrough.Add_Click({ Show-WalkthroughOverlay })
+}
+if ($chkHideWalkthrough) {
+    $chkHideWalkthrough.Add_Checked({
+        $ws = Get-WalkthroughSettings
+        $ws.skipOnLaunch = $true
+        Save-WalkthroughSettings $ws
+    })
+    $chkHideWalkthrough.Add_Unchecked({
+        $ws = Get-WalkthroughSettings
+        $ws.skipOnLaunch = $false
+        Save-WalkthroughSettings $ws
+    })
+}
 
 # ============================================================
 # LOGGING
@@ -3714,9 +5120,9 @@ function Write-GameSetting {
     try {
         $content = Get-Content $gsPath -Raw -Encoding UTF8
         # FS25 format: <tag>value</tag>
-        $patternText = "<$settingTag>([^<]*)</$settingTag>"
+        $patternText = '<' + $settingTag + '>([^<]*)</' + $settingTag + '>'
         # Fallback: <tag value="..."/>
-        $patternAttr = "<$settingTag\s+value=""[^""]*"""
+        $patternAttr = '<' + $settingTag + '\s+value="[^"]*"'
         if ($content -match $patternText) {
             $content = $content -replace $patternText, "<$settingTag>$value</$settingTag>"
             Set-Content $gsPath $content -Encoding UTF8
@@ -3781,8 +5187,22 @@ function Get-CurrentFilter {
     return "All"
 }
 
+function Get-CurrentModCategoryFilter {
+    if ($catVehicle.IsChecked)   { return 'Vehicle' }
+    if ($catPlaceable.IsChecked) { return 'Placeable' }
+    if ($catMap.IsChecked)       { return 'Map' }
+    if ($catScript.IsChecked)    { return 'Script' }
+    if ($catAnimal.IsChecked)    { return 'Animal' }
+    if ($catOther.IsChecked)     { return 'Other' }
+    return 'All'
+}
+
 function Apply-ModFilter {
-    param([string]$filter = "All")
+    param([string]$filter = "All", [string]$CategoryFilter = 'All')
+    if ($filter -eq 'All' -and $CategoryFilter -eq 'All') {
+        $filter = Get-CurrentFilter
+        $CategoryFilter = Get-CurrentModCategoryFilter
+    }
     $searchText = if ($txtModSearch -and $txtModSearch.Text) { $txtModSearch.Text.Trim().ToLower() } else { "" }
     $filtered = New-Object System.Collections.ArrayList
     foreach ($item in $script:AllModItems) {
@@ -3793,19 +5213,25 @@ function Apply-ModFilter {
             "Local"   { $item.Local -eq "Da" }
             default   { $true }
         }
+        if ($show -and $CategoryFilter -ne 'All') {
+            $mt = if ($item.ModType) { $item.ModType } else { 'Other' }
+            $show = ($mt -eq $CategoryFilter)
+        }
         if ($show -and $searchText) {
-            $show = $item.Name.ToLower().Contains($searchText)
+            $show = $item.Name.ToLower().Contains($searchText) -or $item.Category.ToLower().Contains($searchText)
         }
         if ($show) { [void]$filtered.Add($item) }
     }
-    # ItemsSource je brze od Items.Add() po jedan + omogucuje virtualizaciju
-    $lstMods.ItemsSource = $filtered
-    if ($txtModsVisible) { $txtModsVisible.Text = "$($filtered.Count)" }
+    $sorted = @($filtered | Sort-Object ModTypeSort, Name)
+    $lstMods.ItemsSource = $sorted
+    if ($txtModsVisible) { $txtModsVisible.Text = "$($sorted.Count)" }
     if ($txtModSubtitle) {
-        $sub = "Prikazano $($filtered.Count) mod(ova)"
-        if ($searchText) { $sub += " - filter: '$searchText'" }
+        $sub = "Prikazano $($sorted.Count) modova"
+        if ($CategoryFilter -ne 'All') { $sub += " | kategorija: $CategoryFilter" }
+        if ($searchText) { $sub += " | pretraga: '$searchText'" }
         $txtModSubtitle.Text = $sub
     }
+    Start-ModThumbnailLoads -Items $sorted
 }
 
 # ============================================================
@@ -3901,13 +5327,33 @@ function Refresh-ServerStatus {
 # ============================================================
 # MOD LIST & SYNC
 # ============================================================
+function Resolve-LocalModMeta {
+    param(
+        $LocalFile,
+        [string]$FallbackVersion = '-'
+    )
+    $meta = [PSCustomObject]@{
+        ModType       = 'Other'
+        Version       = $FallbackVersion
+        LocalZipPath  = ''
+    }
+    if (-not $LocalFile) { return $meta }
+    try {
+        $meta.LocalZipPath = $LocalFile.FullName
+        $zipMeta = Get-ModMetaFromZip -ZipPath $meta.LocalZipPath
+        if ($zipMeta.ModType) { $meta.ModType = $zipMeta.ModType }
+        if ($zipMeta.Version -and $meta.Version -eq '-') { $meta.Version = $zipMeta.Version }
+    } catch {}
+    return $meta
+}
+
 function Refresh-ModList {
     param($PreloadedServerMods)
     $txtModStatus.Text = "Ucitavam..."
     # Ne mijesati Items i ItemsSource - iskljuci ItemsSource pa ce Apply-ModFilter postaviti opet
     if ($lstMods.ItemsSource) { $lstMods.ItemsSource = $null }
     $script:AllModItems = @()
-    $script:ModListCached = $false
+    if (-not $PreloadedServerMods) { $script:ModListCached = $false }
 
     $modsPath = $script:Config.modsPath
     $localMods = @()
@@ -3928,9 +5374,10 @@ function Refresh-ModList {
         Write-Log "GRESKA: Ne mogu dohvatiti mods.html. Provjeri da je Public Mod Download aktiviran."
         foreach ($mod in $localMods) {
             $size = "{0:N1} MB" -f ($mod.Length / 1MB)
-            $script:AllModItems += [PSCustomObject]@{
-                Status="Lokalno"; Name=$mod.BaseName; Local="Da"; Server="?"; Size=$size
-            }
+            $lm = Resolve-LocalModMeta -LocalFile $mod
+            $script:AllModItems += (New-ModSyncItem -Status 'Lokalno' -DisplayName $mod.BaseName -ZipName $mod.Name `
+                -Local 'Da' -Server '?' -Size $size -StatusDetail 'Server lista nedostupna' `
+                -ModType $lm.ModType -LocalZipPath $lm.LocalZipPath -Version $lm.Version)
         }
         Apply-ModFilter (Get-CurrentFilter)
         return
@@ -3944,35 +5391,47 @@ function Refresh-ModList {
         return
     }
 
-    $localModNames = $localMods | ForEach-Object { $_.Name }
+    $localModIndex = Build-LocalModIndex $localMods
+    $useSizeCheck = $true
+    try { if ($null -ne $script:Config.sizeCheck) { $useSizeCheck = [bool]$script:Config.sizeCheck } } catch {}
     $missing = 0
     $outdated = 0
 
     foreach ($sm in $serverMods) {
-        $isLocal = $localModNames -contains $sm.Name
-        $localMod = $localMods | Where-Object { $_.Name -eq $sm.Name } | Select-Object -First 1
+        $verLabel = '-'
+        try {
+            if ($sm.PSObject.Properties['version'] -and $sm.version) { $verLabel = [string]$sm.version }
+            elseif ($sm.PSObject.Properties['Version'] -and $sm.Version) { $verLabel = [string]$sm.Version }
+        } catch {}
+        $zipName = if ($sm.Name -match '\.zip$') { $sm.Name } else { "$($sm.Name).zip" }
+        $localMod = Find-LocalModEntry -LocalIndex $localModIndex -ServerName $sm.Name
+        $isLocal = $null -ne $localMod
         $size = if ($localMod) { "{0:N1} MB" -f ($localMod.Length / 1MB) } else { "-" }
-        $displayName = $sm.Name -replace '\.zip$',''
+        $displayName = ($zipName -replace '\.zip$','')
+        $localMeta = Resolve-LocalModMeta -LocalFile $localMod -FallbackVersion $verLabel
+        if ($localMeta.Version -and $localMeta.Version -ne '-') { $verLabel = $localMeta.Version }
         if ($isLocal) {
             $isOutdated = $false
             $serverSizeText = ''
-            # Preferred path: SHA-256 compare (bot manifest provides hash).
+            $statusDetail = ''
+            $localSha = ''
             $smSha = ''
+            # Preferred path: SHA-256 compare (bot manifest provides hash).
             try { $smSha = if ($sm.Sha256) { ([string]$sm.Sha256).ToLower() } else { '' } } catch {}
             if ($smSha) {
-                # Quick reject: if server reports a size and it differs from local, no need to hash.
-                if ($sm.Size -and $sm.Size -gt 0 -and [Math]::Abs($localMod.Length - [long]$sm.Size) -gt 1024) {
+                $localSha = Get-LocalModHash -File $localMod
+                if (-not $localSha) {
                     $isOutdated = $true
-                    $serverSizeText = "{0:N1} MB" -f ($sm.Size / 1MB)
-                } else {
-                    $localSha = Get-LocalModHash -File $localMod
-                    if ($localSha -and $localSha -ne $smSha) {
-                        $isOutdated = $true
-                        if ($sm.Size -and $sm.Size -gt 0) { $serverSizeText = "{0:N1} MB" -f ($sm.Size / 1MB) }
-                    }
+                    $statusDetail = 'Lokalni ZIP postoji ali SHA nije moguce izracunati'
+                    Write-Log "ZASTARIO (SHA nedostupan): $displayName ($($localMod.Name))"
+                } elseif ($localSha -ne $smSha) {
+                    $isOutdated = $true
+                    $statusDetail = 'SHA-256 hash se ne podudara sa serverom'
+                    if ($sm.Size -and $sm.Size -gt 0) { $serverSizeText = "{0:N1} MB" -f ($sm.Size / 1MB) }
+                    Write-Log "ZASTARIO (SHA): $displayName lokal=$localSha server=$smSha"
                 }
-            } else {
-                # Legacy fallback: HTTP HEAD Content-Length.
+            } elseif ($useSizeCheck -and $sm.Url) {
+                # Legacy fallback: HTTP HEAD Content-Length (samo kad nema SHA manifesta).
                 $serverSize = 0
                 try {
                     $head = Invoke-WebRequest -Uri $sm.Url -Method Head -UseBasicParsing -TimeoutSec 5
@@ -3981,36 +5440,43 @@ function Refresh-ModList {
                 } catch {}
                 if ($serverSize -gt 0 -and [Math]::Abs($localMod.Length - $serverSize) -gt 1024) {
                     $isOutdated = $true
+                    $statusDetail = 'Velicina datoteke ne odgovara serveru'
                     $serverSizeText = "{0:N1} MB" -f ($serverSize / 1MB)
+                    Write-Log "ZASTARIO (velicina): $displayName lokal=$($localMod.Length) server=$serverSize"
                 }
             }
             if ($isOutdated) {
                 $outdated++
                 $missing++
                 $serverLabel = if ($serverSizeText) { "Da ($serverSizeText)" } else { "Da (azurirano)" }
-                $script:AllModItems += [PSCustomObject]@{
-                    Status="ZASTARIO"; Name=$displayName; Local="Da"; Server=$serverLabel; Size=$size
-                }
+                $script:AllModItems += (New-ModSyncItem -Status 'ZASTARIO' -DisplayName $displayName -ZipName $zipName `
+                    -Local 'Da' -Server $serverLabel -Size $size -StatusDetail $statusDetail `
+                    -LocalSha $localSha -ServerSha $smSha -Version $verLabel `
+                    -ModType $localMeta.ModType -LocalZipPath $localMeta.LocalZipPath)
             } else {
-                $script:AllModItems += [PSCustomObject]@{
-                    Status="OK"; Name=$displayName; Local="Da"; Server="Da"; Size=$size
-                }
+                $script:AllModItems += (New-ModSyncItem -Status 'OK' -DisplayName $displayName -ZipName $zipName `
+                    -Local 'Da' -Server 'Da' -Size $size -StatusDetail 'Sinkronizirano (SHA/velicina OK)' -Version $verLabel `
+                    -ModType $localMeta.ModType -LocalZipPath $localMeta.LocalZipPath)
             }
         } else {
             $missing++
-            $script:AllModItems += [PSCustomObject]@{
-                Status="FALI"; Name=$displayName; Local="Ne"; Server="Da"; Size="-"
-            }
+            $script:AllModItems += (New-ModSyncItem -Status 'FALI' -DisplayName $displayName -ZipName $zipName `
+                -Local 'Ne' -Server 'Da' -Size '-' -StatusDetail 'Lokalni ZIP nedostaje u mods folderu' -Version $verLabel `
+                -ModType 'Other')
         }
     }
 
-    $serverModNames = $serverMods | ForEach-Object { $_.Name }
+    $serverModKeys = $serverMods | ForEach-Object { Get-NormalizedModZipName $_.Name }
+    $serverCanonKeys = $serverMods | ForEach-Object { Get-CanonicalModKey $_.Name }
     foreach ($lm in $localMods) {
-        if ($serverModNames -notcontains $lm.Name) {
+        $lmKey = Get-NormalizedModZipName $lm.Name
+        $lmCanon = Get-CanonicalModKey $lm.Name
+        if (($serverModKeys -notcontains $lmKey) -and ($lmCanon -and $serverCanonKeys -notcontains $lmCanon)) {
             $size = "{0:N1} MB" -f ($lm.Length / 1MB)
-            $script:AllModItems += [PSCustomObject]@{
-                Status="Extra"; Name=$lm.BaseName; Local="Da"; Server="Ne"; Size=$size
-            }
+            $extraMeta = Resolve-LocalModMeta -LocalFile $lm
+            $script:AllModItems += (New-ModSyncItem -Status 'Extra' -DisplayName $lm.BaseName -ZipName $lm.Name `
+                -Local 'Da' -Server 'Ne' -Size $size -StatusDetail 'Nije na server listi' `
+                -ModType $extraMeta.ModType -LocalZipPath $extraMeta.LocalZipPath -Version $extraMeta.Version)
         }
     }
 
@@ -4030,8 +5496,16 @@ function Refresh-ModList {
     $script:Config.lastSync = Get-Date -Format "dd.MM.yyyy HH:mm"
     $txtLastSync.Text = "Zadnji sync: $($script:Config.lastSync)"
     Save-Config
-    $txtModStatus.Text = "Lokalno: $myCount | Server: $($serverMods.Count) | Fali/Zastarjelo: $missing"
-    Write-Log "Pregled zavrsen. Lokalno=$myCount  Server=$($serverMods.Count)  Fali=$missing  (od toga zastarjelih: $outdated)"
+    $srcLabel = if ($script:ModListSource -eq 'bot-sha256') { 'SHA-256 manifest' } else { 'mods.html' }
+    $txtModStatus.Text = "Lokalno: $myCount | Server: $($serverMods.Count) | Fali/Zastarjelo: $missing | Izvor: $srcLabel"
+    if ($txtModSubtitle) {
+        $txtModSubtitle.Text = if ($script:ModListSource -eq 'bot-sha256') {
+            'Server-authoritative lista + SHA-256 usporedba (bot API)'
+        } else {
+            'Legacy mods.html - bez hash provjere (aktiviraj bot manifest)'
+        }
+    }
+    Write-Log "Pregled zavrsen. Lokalno=$myCount  Server=$($serverMods.Count)  Fali=$missing  (od toga zastarjelih: $outdated)  Izvor=$srcLabel"
     # Dashboard preview "Fali modovi"
     if ($lstMissingPreview) {
         try {
@@ -4059,18 +5533,12 @@ function Download-MissingMods {
         New-Item -ItemType Directory -Path $modsPath -Force | Out-Null
     }
 
-    $missingNames = @()
-    foreach ($item in $lstMods.Items) {
-        if ($item.Status -eq "FALI" -or $item.Status -eq "ZASTARIO") { $missingNames += $item.Name }
-    }
-    if ($missingNames.Count -eq 0) {
+    $missingItems = @(Get-MissingSyncModItems)
+    if ($missingItems.Count -eq 0) {
         Refresh-ModList
-        $missingNames = @()
-        foreach ($item in $lstMods.Items) {
-            if ($item.Status -eq "FALI" -or $item.Status -eq "ZASTARIO") { $missingNames += $item.Name }
-        }
+        $missingItems = @(Get-MissingSyncModItems)
     }
-    if ($missingNames.Count -eq 0) {
+    if ($missingItems.Count -eq 0) {
         Write-Log "Sve modove vec imas!"
         Show-SRDialog "Sve modove vec imas!" "SR Launcher" "Success"
         return
@@ -4082,24 +5550,23 @@ function Download-MissingMods {
         return
     }
 
-    Write-Log "Skidam $($missingNames.Count) mod(ova)..."
+    Write-Log "Skidam $($missingItems.Count) modova..."
     $txtProgress.Text = "Skidam modove..."
     $downloaded = 0
 
-    foreach ($modName in $missingNames) {
-        $modEntry = $serverMods | Where-Object {
-            $_.Name -eq "$modName.zip" -or $_.Name -eq $modName -or ($_.Name -replace '\.zip$','') -eq $modName
-        } | Select-Object -First 1
+    foreach ($item in $missingItems) {
+        $lookup = if ($item.ZipName) { $item.ZipName } else { $item.Name }
+        $modEntry = Resolve-ServerModEntry -ServerMods $serverMods -DisplayOrZipName $lookup
 
         if (-not $modEntry) {
-            Write-Log "  Preskacam: $modName (nema URL)"
+            Write-Log "  Preskacam: $($item.Name) (nema URL / nije na server listi)"
             continue
         }
 
         $dest = Join-Path $modsPath $modEntry.Name
         try {
             Write-Log "  Skidam: $($modEntry.Name)..."
-            $txtProgress.Text = "$($modEntry.Name) ($($downloaded+1)/$($missingNames.Count))"
+            $txtProgress.Text = "$($modEntry.Name) ($($downloaded+1)/$($missingItems.Count))"
             $window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
 
             $wc = New-Object System.Net.WebClient
@@ -4117,8 +5584,8 @@ function Download-MissingMods {
     }
 
     $txtProgress.Text = ""
-    Write-Log "Zavrseno! $downloaded/$($missingNames.Count) skinuto."
-    Show-SRDialog "Skinuto $downloaded od $($missingNames.Count) modova!" "SR Launcher" "Success"
+    Write-Log "Zavrseno! $downloaded/$($missingItems.Count) skinuto."
+    Show-SRDialog "Skinuto $downloaded od $($missingItems.Count) modova!" "SR Launcher" "Success"
     Refresh-ModList
 }
 
@@ -4201,25 +5668,7 @@ function Join-Server {
     try {
         $serverStatus = Get-ServerStatus
         if ($serverStatus.online -and $serverStatus.gameVersion) {
-            $localVer = ''
-            try {
-                $vi = (Get-Item $exePath).VersionInfo
-                # ProductVersion je tocnija verzija igre (npr. "1.18.0.0")
-                # FileVersion moze biti genericki Windows version (npr. "10.0.0.0")
-                $localVer = if ($vi.ProductVersion -and $vi.ProductVersion -ne '0.0.0.0') { $vi.ProductVersion } else { $vi.FileVersion }
-                # Ocisti trailing znakove i razmake
-                if ($localVer) { $localVer = $localVer.Trim() }
-                # Ako je jos uvijek nesto sumnjivo (npr. "10.0.0.0"), pokusaj iz gameSettings.xml
-                if (-not $localVer -or $localVer -match '^10\.' -or $localVer -eq '0.0.0.0') {
-                    $gsPath2 = Get-GameSettingsPath
-                    if (Test-Path $gsPath2) {
-                        $gsContent2 = Get-Content $gsPath2 -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-                        # FS25 sprema verziju igre u gameSettings.xml
-                        if ($gsContent2 -match '<version>([^<]+)</version>') { $localVer = $Matches[1].Trim() }
-                        elseif ($gsContent2 -match '<version\s+value="([^"]+)"') { $localVer = $Matches[1].Trim() }
-                    }
-                }
-            } catch {}
+            $localVer = Get-FS25GameVersion -ExePath $exePath
             if ($localVer -and $serverStatus.gameVersion -and $localVer -ne $serverStatus.gameVersion) {
                 $r = Show-SRConfirm "Verzija igre se ne podudara!`n`nServer: $($serverStatus.gameVersion)`nTvoja:  $localVer`n`nServer ce te najvjerojatnije kickati.`nPokrenuti svejedno?" "SR Launcher" "Pokreni" "Odustani"
                 if ($r -ne 'Yes') {
@@ -4234,13 +5683,16 @@ function Join-Server {
     Write-Log "Provjeravam modove..."
     $txtJoinStatus.Text = "Provjeravam modove..."
     Refresh-ModList
-    $missingCount = 0
-    foreach ($item in $lstMods.Items) {
-        if ($item.Status -eq "FALI" -or $item.Status -eq "ZASTARIO") { $missingCount++ }
-    }
+    $missingItems = @(Get-MissingSyncModItems)
+    $missingCount = $missingItems.Count
 
     if ($missingCount -gt 0) {
-        $r = Show-SRConfirm "Fali ti / zastarjelo $missingCount mod(ova).`n`nDa  = skini sve i pokreni igru`nNe  = ne pokrecem igru" "SR Launcher" "Da, skini i pokreni" "Ne pokreci"
+        $preview = ($missingItems | Select-Object -First 8 | ForEach-Object {
+            $d = if ($_.StatusDetail) { " - $($_.StatusDetail)" } else { '' }
+            "  [$($_.Status)] $($_.Name)$d"
+        }) -join "`n"
+        if ($missingCount -gt 8) { $preview += "`n  ... i jos $($missingCount - 8)" }
+        $r = Show-SRConfirm "Fali ti / zastarjelo $missingCount modova:`n`n$preview`n`nDa  = skini sve i pokreni igru`nNe  = ne pokrecem igru" "SR Launcher" "Da, skini i pokreni" "Ne pokreci"
         if ($r -ne 'Yes') {
             Write-Log "Igrac odustao - igra se ne pokrece (fali $missingCount modova)."
             $txtJoinStatus.Text = "Igra nije pokrenuta - fali modova."
@@ -4252,10 +5704,7 @@ function Join-Server {
         Download-MissingMods
         # Re-check nakon downloada
         Refresh-ModList
-        $stillMissing = 0
-        foreach ($item in $lstMods.Items) {
-            if ($item.Status -eq "FALI" -or $item.Status -eq "ZASTARIO") { $stillMissing++ }
-        }
+        $stillMissing = (Get-MissingSyncModItems).Count
         if ($stillMissing -gt 0) {
             $r2 = Show-SRConfirm "Nakon downloada jos uvijek fali $stillMissing modova.`nServer ce te najvjerojatnije kickati.`n`nPokrenuti svejedno?" "SR Launcher" "Pokreni" "Odustani"
             if ($r2 -ne 'Yes') {
@@ -4281,7 +5730,7 @@ function Join-Server {
             Write-Log "Launch arg: -skipStartVideos (intro iskljucen)"
         }
     } catch {}
-    # Pokreni igru — podrzava Steam i Giants Launcher
+    # Pokreni igru - podrzava Steam i Giants Launcher
     $isGiantsLauncher = $false
     try {
         # Detektiraj je li FS25 instaliran preko Giants Launchera
@@ -4299,8 +5748,8 @@ function Join-Server {
     if ($isGiantsLauncher -and $launchArgs.Count -gt 0) {
         # Giants Launcher ignorira command line argumente
         # Ali gameSettings.xml je vec postavljen (Write-GameSetting iznad)
-        # Pokreni igru normalno — isIntroActive u xml-u ce uciniti svoje
-        Write-Log "Giants Launcher detektiran — intro kontroliran kroz gameSettings.xml"
+        # Pokreni igru normalno - isIntroActive u xml-u ce uciniti svoje
+        Write-Log "Giants Launcher detektiran - intro kontroliran kroz gameSettings.xml"
         Start-Process $exePath
     } elseif ($launchArgs.Count -gt 0) {
         Start-Process $exePath -ArgumentList $launchArgs
@@ -4354,6 +5803,13 @@ $btnJoinServer.Add_Click({ Join-Server })
 $btnSyncMods.Add_Click({ Refresh-ModList })
 if ($btnGoToMods) { $btnGoToMods.Add_Click({ $navMods.IsChecked = $true }) }
 $btnRefreshMods.Add_Click({ Refresh-ModList })
+if ($btnRescanMods) {
+    $btnRescanMods.Add_Click({
+        $script:ModListCached = $false
+        Refresh-ModList
+        try { Show-Toast "Modovi ponovno skenirani" "info" } catch {}
+    })
+}
 $btnDownloadMissing.Add_Click({ Download-MissingMods })
 $btnRefreshStatus.Add_Click({ Refresh-ServerStatus })
 
@@ -4555,6 +6011,13 @@ $filterServer.Add_Checked({ Apply-ModFilter "Server" })
 $filterMissing.Add_Checked({ Apply-ModFilter "Missing" })
 $filterExtra.Add_Checked({ Apply-ModFilter "Extra" })
 $filterLocal.Add_Checked({ Apply-ModFilter "Local" })
+$catAll.Add_Checked({ Apply-ModFilter })
+$catVehicle.Add_Checked({ Apply-ModFilter })
+$catPlaceable.Add_Checked({ Apply-ModFilter })
+$catMap.Add_Checked({ Apply-ModFilter })
+$catScript.Add_Checked({ Apply-ModFilter })
+$catAnimal.Add_Checked({ Apply-ModFilter })
+$catOther.Add_Checked({ Apply-ModFilter })
 
 # Game Options event handlers - auto-save on toggle click
 $chkIntroScene.Add_Checked({
@@ -4609,6 +6072,7 @@ $window.Add_ContentRendered({
 # ============================================================
 # STARTUP (use preloaded data from splash screen)
 # ============================================================
+Sync-AppVersionFromScript | Out-Null
 $txtVersion.Text = "v$($script:AppVersion)"
 $txtGameExe.Text = $script:Config.gamePath
 $txtModsPath.Text = $script:Config.modsPath
@@ -4619,10 +6083,11 @@ $gs = if ($script:PreloadedGameSettings) { $script:PreloadedGameSettings } else 
 $chkIntroScene.IsChecked = $gs.introScene
 $chkDevConsole.IsChecked = $gs.devConsole
 
-$localModCount = 0
-if ($script:Config.modsPath -and (Test-Path $script:Config.modsPath)) {
-    $localModCount = @(Get-ChildItem $script:Config.modsPath -Filter "*.zip" -ErrorAction SilentlyContinue).Count
-}
+$localModCount = if ($null -ne $script:PreloadedLocalModCount) {
+    $script:PreloadedLocalModCount
+} elseif ($script:Config.modsPath -and (Test-Path $script:Config.modsPath)) {
+    @(Get-ChildItem $script:Config.modsPath -Filter "*.zip" -ErrorAction SilentlyContinue).Count
+} else { 0 }
 $txtMyModCount.Text = "$localModCount"
 
 Update-ServerButtons
@@ -4633,6 +6098,27 @@ Write-Log "Serveri: $($script:Config.servers.Count)"
 Write-Log "GitHub: $($script:GitHubRepo)"
 Write-Log "gameSettings.xml: $(Get-GameSettingsPath)"
 Write-Log "Config: $($script:ConfigPath)"
+Update-LicenseUi
+
+if ($btnCopyHwid) {
+    $btnCopyHwid.Add_Click({
+        try {
+            [System.Windows.Clipboard]::SetText((Get-Hwid))
+            Show-Toast -Message 'HWID kopiran u clipboard.' -Kind 'success'
+        } catch {
+            Show-SRDialog "Ne mogu kopirati HWID: $($_.Exception.Message)" "HWID" "Error"
+        }
+    })
+}
+if ($btnChangeLicense) {
+    $btnChangeLicense.Add_Click({
+        $res = Show-LicenseWindow
+        if ($res -eq 'ok') {
+            Update-LicenseUi
+            Show-Toast -Message 'Licenca azurirana.' -Kind 'success'
+        }
+    })
+}
 
 # ============================================================
 # v1.2 - TOAST NOTIFIKACIJE
@@ -4726,7 +6212,7 @@ function Get-SelectedModFile {
 
 function Delete-SelectedMod {
     $sel = $lstMods.SelectedItem
-    if (-not $sel) { Show-Toast "Oznaci mod u listi za brisanje" "warn"; return }
+    if (-not $sel) { Show-Toast "Odaberi mod u gridu za brisanje" "warn"; return }
     $f = Get-SelectedModFile
     if (-not $f) { Show-Toast "Mod nije pronaden lokalno (vec obrisan?)" "warn"; return }
     $r = Show-SRConfirm "Obrisati '$($sel.Name)'?`n`nFajl ide u Recycle Bin." "SR Launcher" "Obrisi" "Odustani"
@@ -4772,7 +6258,7 @@ $ctxCopyName.Add_Click({
 # v1.2 - CUSTOM SERVER DIALOG
 # ============================================================
 function Show-AddServerDialog {
-    [xml]$dlgXaml = @"
+    [xml]$dlgXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Dodaj custom server" Width="460" Height="540"
@@ -4831,7 +6317,7 @@ function Show-AddServerDialog {
         </Grid>
     </Border>
 </Window>
-"@
+'@
     $reader2 = New-Object System.Xml.XmlNodeReader $dlgXaml
     $dlg = [Windows.Markup.XamlReader]::Load($reader2)
     $dlg.Owner = $window
@@ -4872,7 +6358,7 @@ $btnAddCustomServer.Add_Click({
     if ($newSrv) {
         # Provjeri duplikate po imenu
         if ($script:Config.servers | Where-Object { $_.name -eq $newSrv.name }) {
-            Show-Toast "Server '$($newSrv.name)' vec postoji" "warn"
+            Show-Toast ("Server {0} vec postoji" -f $newSrv.name) "warn"
             return
         }
         $script:Config.servers += $newSrv
@@ -4882,7 +6368,7 @@ $btnAddCustomServer.Add_Click({
         Refresh-ServerStatus
         Update-ServerPings
         Show-Toast "Server dodan: $($newSrv.name)" "success"
-        Write-Log "Custom server dodan: $($newSrv.name) ($($newSrv.ip):$($newSrv.gamePort))"
+        Write-Log ('Custom server dodan: {0} ({1}:{2})' -f $newSrv.name, $newSrv.ip, $newSrv.gamePort)
     }
 })
 
@@ -5097,7 +6583,12 @@ if ($btnSaveBehavior) {
         $script:Config.toastsEnabled= [bool]$chkToasts.IsChecked
         $script:Config.sizeCheck    = [bool]$chkSizeCheck.IsChecked
         Save-Config
-        Show-Toast "Postavke spremljene" success
+        if ($chkHideWalkthrough) {
+            $ws = Get-WalkthroughSettings
+            $ws.skipOnLaunch = [bool]$chkHideWalkthrough.IsChecked
+            Save-WalkthroughSettings $ws
+        }
+        Show-Toast "Postavke spremljene" "success"
     })
 }
 
@@ -5110,6 +6601,10 @@ try {
     if ($null -ne $script:Config.autoRefresh)  { $chkAutoRefresh.IsChecked = [bool]$script:Config.autoRefresh }
     if ($null -ne $script:Config.toastsEnabled){ $chkToasts.IsChecked = [bool]$script:Config.toastsEnabled }
     if ($null -ne $script:Config.sizeCheck)    { $chkSizeCheck.IsChecked = [bool]$script:Config.sizeCheck }
+    try {
+        $wtSet = Get-WalkthroughSettings
+        if ($chkHideWalkthrough) { $chkHideWalkthrough.IsChecked = [bool]$wtSet.skipOnLaunch }
+    } catch {}
     # Auto-check theme radio
     switch ($script:Config.theme) {
         "#30A46C" { $themeGreen.IsChecked  = $true }
@@ -5154,28 +6649,34 @@ $btnImportConfig.Add_Click({
 })
 
 $window.Add_Loaded({
-    # Use preloaded server status from splash screen
-    $script:startupTimer = New-Object System.Windows.Threading.DispatcherTimer
-    $script:startupTimer.Interval = [TimeSpan]::FromMilliseconds(200)
-    $script:startupTimer.Add_Tick({
-        $script:startupTimer.Stop()
-        if ($script:PreloadedServerStatus) {
-            Refresh-ServerStatus -PreloadedStatus $script:PreloadedServerStatus
-            $script:PreloadedServerStatus = $null
-        } else {
-            Refresh-ServerStatus
-        }
-    })
-    $script:startupTimer.Start()
-
-    # Use preloaded update check from splash screen
-    if ($script:LatestVersion) {
-        $btnUpdateNotify.Content = "Nova verzija v$($script:LatestVersion.version)!"
-        $btnUpdateNotify.Visibility = "Visible"
-        $txtUpdateInfo.Text = "v$($script:LatestVersion.version) dostupna!"
-        $updateBanner.Visibility = "Visible"
-        Write-Log "NOVA VERZIJA dostupna: v$($script:LatestVersion.version)"
-    }
+  # Dashboard: preload s splasha; update provjera u zasebnom Loaded handleru iznad
+    $window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [Action]{
+        try {
+            if ($script:PreloadedServerStatus) {
+                Refresh-ServerStatus -Silent -PreloadedStatus $script:PreloadedServerStatus
+                $script:PreloadedServerStatus = $null
+            } else {
+                Refresh-ServerStatus -Silent
+            }
+        } catch {}
+        try {
+            if ($script:PreloadedModList) {
+                Refresh-ModList -PreloadedServerMods $script:PreloadedModList
+                $script:PreloadedModList = $null
+            } elseif (-not $script:ModListCached) {
+                Refresh-ModList
+            }
+        } catch {}
+        try {
+            $gs = $script:PreloadedGameSettings
+            if (-not $gs) { $gs = Read-GameSettings }
+            if ($gs) {
+                $chkIntroScene.IsChecked = $gs.introScene
+                $chkDevConsole.IsChecked = $gs.devConsole
+            }
+            $script:PreloadedGameSettings = $null
+        } catch {}
+    }) | Out-Null
 
     # Auto-refresh status every 60 seconds (tiho - bez log spama)
     $script:autoRefreshTimer = New-Object System.Windows.Threading.DispatcherTimer
@@ -5193,6 +6694,16 @@ $window.Add_Loaded({
     $script:firstPing.Interval = [TimeSpan]::FromMilliseconds(500)
     $script:firstPing.Add_Tick({ $script:firstPing.Stop(); Update-ServerPings })
     $script:firstPing.Start()
+
+    # Walkthrough pri prvom pokretanju (ako nije iskljucen u AppData)
+    $window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::ApplicationIdle, [Action]{
+        try {
+            if ($walkthroughOverlay) {
+                $wt = Get-WalkthroughSettings
+                if (-not $wt.skipOnLaunch) { Show-WalkthroughOverlay }
+            }
+        } catch {}
+    }) | Out-Null
 
     # =========================================================================
     # FARM-THEMED ANIMATED BACKGROUND (wheat, fence, farm silhouette, dust)
@@ -5656,22 +7167,39 @@ function Ensure-LicenseValid {
     return ($res -eq "ok")
 }
 
-# Enforce license before main window shows
+# Licenca + mrezni preload (splash jos vidljiv - bez praznog ekrana prije glavnog prozora)
+Set-SplashStep "Provjera licence..." 45
 if (-not (Ensure-LicenseValid)) {
+    Close-StartupSplash
     [System.Windows.MessageBox]::Show("Licenca nije aktivirana. Launcher se gasi.","Slavonska Ravnica","OK","Warning") | Out-Null
     return
 }
 
+Set-SplashStep "Sinkronizacija servera..." 58
+try { $script:PreloadedServerStatus = Get-ServerStatus } catch {}
+
+Set-SplashStep "Provjera modova..." 74
+try { $script:PreloadedModList = Get-ServerModList } catch {}
+
+Set-SplashStep "Ucitavam opcije igre..." 86
+try { $script:PreloadedGameSettings = Read-GameSettings } catch {}
+Invoke-SplashPump
+Set-SplashStep "Pokrecem..." 100
+Close-StartupSplash
+
 # ============================================================
-# AUTO-UPDATE PROMPT (ako je splash detektirao noviju verziju)
+# AUTO-UPDATE PROMPT (provjera u pozadini nakon prikaza prozora)
 # ============================================================
 $window.Add_Loaded({
     try {
-        if ($script:LatestVersion -and $script:LatestVersion.version) {
+        if (Check-ForUpdate) {
+            $btnUpdateNotify.Content = "Nova verzija v$($script:LatestVersion.version)!"
+            $btnUpdateNotify.Visibility = "Visible"
+            $txtUpdateInfo.Text = "v$($script:LatestVersion.version) dostupna!"
+            $updateBanner.Visibility = "Visible"
+            Write-Log "NOVA VERZIJA dostupna: v$($script:LatestVersion.version)"
             $r = Show-SRConfirm "Dostupna je nova verzija launchera: v$($script:LatestVersion.version)`n`nTrenutna: v$($script:AppVersion)`n`nSkinuti i instalirati sada?" "Update dostupan"
-            if ($r -eq 'Yes') {
-                Download-Update
-            }
+            if ($r -eq 'Yes') { Download-Update }
         }
     } catch { Write-Log "Auto-update prompt greska: $($_.Exception.Message)" }
 })

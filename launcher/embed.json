@@ -1,7 +1,7 @@
 ﻿{
-    "url":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.1.0.6/SR_Manager.zip",
-    "downloadUrl":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.1.0.6/SR_Manager.zip",
-    "description":  "Skini **SR_Manager.zip**, raspakiraj i pokreni **Pokreni SR Manager.bat** (ili SR Manager.vbs).\n\n**NE** pokreci SRManager.exe - to je stari installer.",
+    "url":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.2.0.2/SR_Manager.zip",
+    "downloadUrl":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.2.0.2/SR_Manager.zip",
+    "description":  "Skini **SR_Manager.zip**, raspakiraj i pokreni **Pokreni SR Manager.bat** (ili SR Manager.vbs).\n\n**NE** pokreci SRManager.exe - to je stari installer.\n\nProblem? **TEST-POKRENI.bat**",
     "color":  16056599,
     "downloadFile":  "SR_Manager.zip",
     "installType":  "zip",
@@ -9,7 +9,7 @@
                    {
                        "inline":  true,
                        "name":  "Verzija",
-                       "value":  "v2.1.0.6"
+                       "value":  "v2.2.0.2"
                    },
                    {
                        "inline":  true,
@@ -24,11 +24,11 @@
                    {
                        "inline":  false,
                        "name":  "SR Manager (vs generic hub)",
-                       "value":  "- Vise FS25 servera + ping i live status\n- Licenca / HWID / probna 3 dana (bot API)\n- SHA-256 mod manifest i sync (server-authoritative)\n- GitHub auto-update (ZIP + SlavonskaRavnica.ps1)\n- Admin mod, bot config sync, session heartbeat"
+                       "value":  "- Vise FS25 servera + ping i live status\n- Licenca / HWID / probna 3 dana (bot API)\n- SHA-256 mod manifest i sync (server-authoritative)\n- GitHub auto-update (ZIP + SlavonskaRavnica.ps1)\n- Admin mod, bot config sync, session heartbeat\n- UI 2.2: vodic, sidebar sekcije, mod grid, scroll Savegame\n- Mod thumbnails iz ZIP (modDesc), filter po kategoriji\n- Desktop shortcut -\u003e Pokreni SR Manager.bat"
                    }
                ],
     "buttonLabel":  "Skini SR Manager (ZIP)",
-    "title":  "SR Manager â€” Slavonska Ravnica",
+    "title":  "SR Manager - Slavonska Ravnica",
     "thumbnail":  {
                       "url":  "https://raw.githubusercontent.com/7oncha/SRManager-Installer/master/sr_logo.png"
                   }

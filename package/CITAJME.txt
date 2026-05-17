@@ -1,0 +1,67 @@
+SR Manager - Slavonska Ravnica (portable)
+
+==========================================
+
+Za razliku od generic FS hub launchera (npr. FarmSim Hub MSI):
+vise servera, licenca/HWID, SHA-256 mod sync preko bota, GitHub update.
+
+1. Raspakiraj CIJELI zip u jedan folder (npr. Desktop\SR Manager).
+
+   Ne pokreci iz zip arhive - prvo Extract All / Raspakiraj.
+
+
+
+2. Pokreni (preporuceno):
+
+     Pokreni SR Manager.bat
+
+   ili dvoklik na:
+
+     SR Manager.vbs
+
+
+
+   NAPOMENA: SRManager.exe u ovom zipu je STARI installer (GUI).
+
+   Za portable paket NE koristi SRManager.exe - koristi .bat ili .vbs iznad.
+
+
+
+3. U folderu moraju biti ZAJEDNO (ne premjesti samo .exe):
+
+     SlavonskaRavnica.ps1
+
+     sr_shared_config.json
+
+     sr_logo.ico (ili .png)
+
+     Pokreni SR Manager.bat
+
+     SR Manager.vbs
+
+
+
+4. Prvi put: otvorit ce se prozor za licencu.
+
+   Klikni "Probna licenca (3 dana)" pa "AKTIVIRAJ", ili unesi kljuc.
+
+   Ako zatvoris prozor bez aktivacije, launcher se gasi.
+
+
+
+5. Ako antivirus blokira:
+
+   - Windows: Zastita od virusa -> Iznimke -> dodaj OVU mapu
+
+   - ili "Vise informacija" -> Pokreni ipak
+
+
+
+6. Azuriranje: launcher sam provjerava novu verziju kad ga otvoris.
+
+   Za potpuno novi paket mozes skinuti novi zip s GitHuba.
+
+
+
+Discord: https://discord.gg/slavonskaravnica
+

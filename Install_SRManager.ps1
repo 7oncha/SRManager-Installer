@@ -12,11 +12,31 @@ $script:BaseUrl    = "https://raw.githubusercontent.com/7oncha/SRManager-Install
 $script:Files = @(
     @{ name = "SlavonskaRavnica.ps1"; url = "$($script:BotUrl)/launcher/script"; fallback = "$($script:BaseUrl)/SlavonskaRavnica.ps1" },
     @{ name = "sr_shared_config.json"; url = "$($script:BotUrl)/launcher/config"; fallback = "$($script:BaseUrl)/sr_shared_config.json" },
+    @{ name = "Pokreni SR Manager.bat"; url = "$($script:BaseUrl)/package/Pokreni%20SR%20Manager.bat" },
     @{ name = "SR Manager.vbs";      url = "$($script:BaseUrl)/SR%20Manager.vbs" },
-    @{ name = "SR Manager.bat";      url = "$($script:BaseUrl)/SR%20Manager.bat" },
     @{ name = "sr_logo.ico";         url = "$($script:BaseUrl)/sr_logo.ico" },
     @{ name = "sr_logo.png";         url = "$($script:BaseUrl)/sr_logo.png" }
 )
+
+function New-SRManagerDesktopShortcut {
+    param([string]$InstallDir)
+    $ws = New-Object -ComObject WScript.Shell
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $shortcut = $ws.CreateShortcut((Join-Path $desktop 'SR Manager.lnk'))
+    $bat = Join-Path $InstallDir 'Pokreni SR Manager.bat'
+    if (-not (Test-Path $bat)) { $bat = Join-Path $InstallDir 'SR Manager.bat' }
+    if (-not (Test-Path $bat)) {
+        $bat = Join-Path $InstallDir 'SR Manager.vbs'
+    }
+    $shortcut.TargetPath = $bat
+    $shortcut.Arguments = ''
+    $shortcut.WorkingDirectory = $InstallDir
+    $shortcut.Description = 'Slavonska Ravnica - SR Manager'
+    $logo = Join-Path $InstallDir 'sr_logo.ico'
+    if (Test-Path $logo) { $shortcut.IconLocation = "$logo,0" }
+    $shortcut.WindowStyle = 7
+    $shortcut.Save()
+}
 
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -300,19 +320,9 @@ $btnInstall.Add_Click({
 
             Update-UI "Download zavrsen..." 85
 
-            # Step 3: Create desktop shortcut
+            # Step 3: Desktop shortcut -> Pokreni SR Manager.bat (WorkingDirectory = install folder)
             Update-UI "Kreiram shortcut..." 90
-            $ws = New-Object -ComObject WScript.Shell
-            $desktop = [Environment]::GetFolderPath('Desktop')
-            $shortcut = $ws.CreateShortcut((Join-Path $desktop 'SR Manager.lnk'))
-            $shortcut.TargetPath = 'wscript.exe'
-            $shortcut.Arguments = "`"$(Join-Path $installDir 'SR Manager.vbs')`""
-            $shortcut.WorkingDirectory = $installDir
-            $shortcut.Description = 'Slavonska Ravnica - SR Manager'
-            $logo = Join-Path $installDir 'sr_logo.ico'
-            if (Test-Path $logo) { $shortcut.IconLocation = "$logo, 0" }
-            $shortcut.WindowStyle = 7
-            $shortcut.Save()
+            New-SRManagerDesktopShortcut -InstallDir $installDir
 
             Update-UI "Gotovo!" 100
             Start-Sleep -Milliseconds 400
