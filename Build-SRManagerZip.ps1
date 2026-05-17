@@ -108,7 +108,7 @@ $srFeatures = @(
     'SHA-256 mod manifest i sync (server-authoritative)'
     'GitHub auto-update (ZIP + SlavonskaRavnica.ps1)'
     'Admin mod, bot config sync, session heartbeat'
-    'UI 2.2: vodic, sidebar sekcije, mod grid, scroll Savegame'
+    'UI 2.2: favoriti, PRIKAZ dropdown, save wizard skeleton, mod thumbnails'
     'Mod thumbnails iz ZIP (modDesc), filter po kategoriji'
     'Desktop shortcut -> Pokreni SR Manager.bat'
 )

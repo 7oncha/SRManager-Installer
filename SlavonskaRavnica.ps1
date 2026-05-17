@@ -68,7 +68,7 @@ try {
 # ============================================================
 # CONSTANTS
 # ============================================================
-$script:AppVersion = "2.2.0.2"
+$script:AppVersion = "2.2.0.3"
 $script:ConfigPath = Join-Path $PSScriptRoot "sr_config.json"
 $script:IsAdmin = $false
 $script:GitHubRepo = ""
@@ -686,6 +686,9 @@ function New-ModSyncItem {
         ThumbSource   = $null
         HasThumb      = $false
         ThumbLoading  = $false
+        FavoriteKey   = ''
+        IsFavorite    = $false
+        FavoriteStar  = [char]0x2606
     }
 }
 
@@ -718,6 +721,8 @@ function Resolve-ServerModEntry {
 # SAVEGAME & MOD PROFILES (Phase 1 - pregled, bez opasnih editova)
 # ============================================================
 $script:ModProfilesPath = Join-Path $env:APPDATA "SR-Launcher\mod-profiles.json"
+$script:ModFavoritesPath = Join-Path $env:APPDATA "SR-Launcher\mod-favorites.json"
+$script:MultiplayerFoldersPath = Join-Path $env:APPDATA "SR-Launcher\multiplayer-folders.json"
 $script:WalkthroughPath = Join-Path $env:APPDATA "SR-Launcher\walkthrough.json"
 
 function Get-WalkthroughSettings {
@@ -1208,6 +1213,126 @@ function Save-ModProfilesStore {
     $Store | ConvertTo-Json -Depth 6 | Set-Content $script:ModProfilesPath -Encoding UTF8
 }
 
+function Get-ModFavoritesStore {
+    $default = [PSCustomObject]@{ version = 1; favorites = @() }
+    if (-not (Test-Path $script:ModFavoritesPath)) { return $default }
+    try {
+        $raw = Get-Content $script:ModFavoritesPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $list = @()
+        if ($raw.favorites) { $list = @($raw.favorites | ForEach-Object { [string]$_ }) }
+        return [PSCustomObject]@{ version = 1; favorites = $list }
+    } catch { return $default }
+}
+
+function Save-ModFavoritesStore {
+    param($Store)
+    $dir = Split-Path $script:ModFavoritesPath -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $Store | ConvertTo-Json -Depth 4 | Set-Content $script:ModFavoritesPath -Encoding UTF8
+}
+
+function Get-ModFavoriteKey {
+    param($Item)
+    if (-not $Item) { return '' }
+    if ($Item.ZipName) { return (Get-CanonicalModKey ($Item.ZipName -replace '\.zip$','')) }
+    return (Get-CanonicalModKey $Item.Name)
+}
+
+function Sync-ModFavoriteFlags {
+    $fav = Get-ModFavoritesStore
+    $set = @{}
+    foreach ($k in @($fav.favorites)) {
+        if ($k) { $set[[string]$k] = $true }
+    }
+    foreach ($item in @($script:AllModItems)) {
+        $key = Get-ModFavoriteKey $item
+        $isFav = $key -and $set.ContainsKey($key)
+        $item | Add-Member -NotePropertyName FavoriteKey -NotePropertyValue $key -Force
+        $item | Add-Member -NotePropertyName IsFavorite -NotePropertyValue $isFav -Force
+        $item | Add-Member -NotePropertyName FavoriteStar -NotePropertyValue $(if ($isFav) { [char]0x2605 } else { [char]0x2606 }) -Force
+    }
+}
+
+function Set-ModFavorite {
+    param(
+        $Item,
+        [bool]$Favorite
+    )
+    $key = Get-ModFavoriteKey $Item
+    if (-not $key) { return }
+    $store = Get-ModFavoritesStore
+    $list = New-Object System.Collections.Generic.List[string]
+    foreach ($k in @($store.favorites)) {
+        if ($k -and $k -ne $key) { [void]$list.Add([string]$k) }
+    }
+    if ($Favorite) { [void]$list.Add($key) }
+    Save-ModFavoritesStore ([PSCustomObject]@{ version = 1; favorites = @($list.ToArray()) })
+    Sync-ModFavoriteFlags
+}
+
+function Get-ModCategoryHrLabel {
+    param([string]$Key)
+    switch ($Key) {
+        'All'         { return 'Svi modovi' }
+        'Favourites'  { return 'Favoriti' }
+        'Vehicle'     { return 'Vozila' }
+        'Placeable'   { return 'Objekti' }
+        'Map'         { return 'Mape' }
+        'Script'      { return 'Skripte' }
+        'Animal'      { return 'Zivotinje' }
+        default       { return 'Ostalo' }
+    }
+}
+
+function Get-ModCategoryCounts {
+    $counts = @{
+        All          = @($script:AllModItems).Count
+        Favourites   = 0
+        Vehicle      = 0
+        Placeable    = 0
+        Map          = 0
+        Script       = 0
+        Animal       = 0
+        Other        = 0
+    }
+    foreach ($item in @($script:AllModItems)) {
+        if ($item.IsFavorite) { $counts.Favourites++ }
+        $mt = if ($item.ModType) { $item.ModType } else { 'Other' }
+        if (-not $counts.ContainsKey($mt)) { $counts.Other++ } else { $counts[$mt]++ }
+    }
+    return $counts
+}
+
+function Update-ModShowCombo {
+    if (-not $cmbModShow) { return }
+    $prevKey = 'All'
+    try {
+        if ($cmbModShow.SelectedItem -and $cmbModShow.SelectedItem.Key) {
+            $prevKey = [string]$cmbModShow.SelectedItem.Key
+        }
+    } catch {}
+    Sync-ModFavoriteFlags
+    $counts = Get-ModCategoryCounts
+    $keys = @('All', 'Favourites', 'Vehicle', 'Placeable', 'Map', 'Script', 'Animal', 'Other')
+    $items = New-Object System.Collections.ArrayList
+    foreach ($k in $keys) {
+        $n = [int]$counts[$k]
+        [void]$items.Add([PSCustomObject]@{
+            Key   = $k
+            Label = "$(Get-ModCategoryHrLabel $k) ($n)"
+        })
+    }
+    $script:ModShowComboUpdating = $true
+    try {
+        $cmbModShow.ItemsSource = @($items.ToArray())
+        $sel = $items | Where-Object { $_.Key -eq $prevKey } | Select-Object -First 1
+        if (-not $sel) { $sel = $items[0] }
+        $cmbModShow.SelectedItem = $sel
+    } finally {
+        $script:ModShowComboUpdating = $false
+    }
+}
+
 function Get-ServerModProfileId {
     $server = Get-ActiveServer
     $slug = ($server.name -replace '[^a-zA-Z0-9\-]', '-').ToLower().Trim('-')
@@ -1290,6 +1415,268 @@ function Refresh-IgraPage {
         if (-not $cmbModProfiles.SelectedItem -and $profiles.Count -gt 0) {
             $cmbModProfiles.SelectedIndex = 0
         }
+    }
+}
+
+# ============================================================
+# MULTIPLAYER FOLDERS (Phase 1 - JSON, UI skeleton, join path)
+# ============================================================
+function Get-MultiplayerFoldersStore {
+    $default = [PSCustomObject]@{
+        version          = 1
+        mainLibraryPath  = ""
+        selectedByServer = @{}
+        folders          = @{}
+    }
+    if (-not (Test-Path $script:MultiplayerFoldersPath)) { return $default }
+    try {
+        $raw = Get-Content $script:MultiplayerFoldersPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $raw.folders) { $raw | Add-Member -NotePropertyName folders -NotePropertyValue (@{}) -Force }
+        if (-not $raw.selectedByServer) { $raw | Add-Member -NotePropertyName selectedByServer -NotePropertyValue (@{}) -Force }
+        return $raw
+    } catch { return $default }
+}
+
+function Save-MultiplayerFoldersStore {
+    param($Store)
+    $dir = Split-Path $script:MultiplayerFoldersPath -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $Store | ConvertTo-Json -Depth 8 | Set-Content $script:MultiplayerFoldersPath -Encoding UTF8
+}
+
+function Get-ServerMpFolderId {
+    return Get-ServerModProfileId
+}
+
+function Get-MpFolderRecord {
+    param([string]$FolderId, $Store)
+    if (-not $Store) { $Store = Get-MultiplayerFoldersStore }
+    if (-not $FolderId -or -not $Store.folders) { return $null }
+    $rec = $null
+    $Store.folders.PSObject.Properties | ForEach-Object {
+        if ($_.Name -eq $FolderId) { $rec = $_.Value }
+    }
+    return $rec
+}
+
+function Ensure-ServerMpFolder {
+    $store = Get-MultiplayerFoldersStore
+    $id = Get-ServerMpFolderId
+    $server = Get-ActiveServer
+    $folders = @{}
+    if ($store.folders) {
+        $store.folders.PSObject.Properties | ForEach-Object { $folders[$_.Name] = $_.Value }
+    }
+    $main = if ($script:Config.modsPath) { [string]$script:Config.modsPath } else { "" }
+    if (-not $store.mainLibraryPath -and $main) { $store.mainLibraryPath = $main }
+    if (-not $folders.ContainsKey($id)) {
+        $parent = if ($main) { Split-Path $main -Parent } else { Join-Path $env:USERPROFILE "Documents\My Games\FarmingSimulator2025" }
+        $slug = ($server.name -replace '[^a-zA-Z0-9]', '') 
+        if (-not $slug) { $slug = "Server$($script:Config.activeServer)" }
+        $path = Join-Path $parent "SR-Mods-$slug"
+        $folders[$id] = [PSCustomObject]@{
+            id             = $id
+            label          = $server.name
+            serverId       = $id
+            path           = $path
+            isFavorite     = $false
+            useMainLibrary = $false
+            notes          = "Auto folder za multiplayer server"
+            updatedAt      = (Get-Date).ToString("o")
+        }
+        $store.folders = $folders
+        $sel = @{}
+        if ($store.selectedByServer) {
+            $store.selectedByServer.PSObject.Properties | ForEach-Object { $sel[$_.Name] = $_.Value }
+        }
+        if (-not $sel.ContainsKey($id)) { $sel[$id] = $id }
+        $store.selectedByServer = $sel
+        Save-MultiplayerFoldersStore $store
+    }
+    return $store
+}
+
+function Get-MpFolderList {
+    $store = Ensure-ServerMpFolder
+    $items = New-Object System.Collections.ArrayList
+    if ($store.folders) {
+        $store.folders.PSObject.Properties | ForEach-Object {
+            $f = $_.Value
+            $label = if ($f.label) { $f.label } else { $_.Name }
+            $star = if ($f.isFavorite) { [char]0x2605 } else { [char]0x2606 }
+            $path = if ($f.useMainLibrary) { $store.mainLibraryPath } elseif ($f.path) { $f.path } else { "" }
+            [void]$items.Add([PSCustomObject]@{
+                Id             = $_.Name
+                Label          = $label
+                Path           = [string]$path
+                IsFavorite     = [bool]$f.isFavorite
+                FavoriteStar   = $star
+                UseMainLibrary = [bool]$f.useMainLibrary
+                ServerId       = if ($f.serverId) { $f.serverId } else { "" }
+            })
+        }
+    }
+    return @($items.ToArray())
+}
+
+function Get-ActiveMultiplayerFolder {
+    $store = Ensure-ServerMpFolder
+    $serverId = Get-ServerMpFolderId
+    $folderId = $serverId
+    if ($store.selectedByServer) {
+        $store.selectedByServer.PSObject.Properties | ForEach-Object {
+            if ($_.Name -eq $serverId -and $_.Value) { $folderId = [string]$_.Value }
+        }
+    }
+    $rec = Get-MpFolderRecord -FolderId $folderId -Store $store
+    if (-not $rec) { $rec = Get-MpFolderRecord -FolderId $serverId -Store $store }
+    if (-not $rec) { return $null }
+    if ([bool]$rec.useMainLibrary) {
+        return [PSCustomObject]@{
+            Id    = $rec.id
+            Label = if ($rec.label) { $rec.label } else { 'Glavna biblioteka' }
+            Path  = if ($store.mainLibraryPath) { $store.mainLibraryPath } else { $script:Config.modsPath }
+            UseMainLibrary = $true
+        }
+    }
+    return [PSCustomObject]@{
+        Id    = $rec.id
+        Label = if ($rec.label) { $rec.label } else { $rec.id }
+        Path  = if ($rec.path) { [string]$rec.path } else { "" }
+        UseMainLibrary = $false
+    }
+}
+
+function Get-EffectiveModsPath {
+    $active = Get-ActiveMultiplayerFolder
+    if ($active -and $active.Path) {
+        $p = [string]$active.Path.Trim()
+        if ($p) { return $p }
+    }
+    return $script:Config.modsPath
+}
+
+function Set-ActiveMpFolderForServer {
+    param([string]$FolderId)
+    if (-not $FolderId) { return }
+    $store = Ensure-ServerMpFolder
+    $serverId = Get-ServerMpFolderId
+    $sel = @{}
+    if ($store.selectedByServer) {
+        $store.selectedByServer.PSObject.Properties | ForEach-Object { $sel[$_.Name] = $_.Value }
+    }
+    $sel[$serverId] = $FolderId
+    $store.selectedByServer = $sel
+    Save-MultiplayerFoldersStore $store
+    Write-Log "Multiplayer folder: $FolderId za server $serverId"
+}
+
+function Set-MpFolderFavorite {
+    param([string]$FolderId, [bool]$Favorite)
+    if (-not $FolderId) { return }
+    $store = Get-MultiplayerFoldersStore
+    $rec = Get-MpFolderRecord -FolderId $FolderId -Store $store
+    if (-not $rec) { return }
+    $rec.isFavorite = $Favorite
+    $rec.updatedAt = (Get-Date).ToString("o")
+    Save-MultiplayerFoldersStore $store
+}
+
+function Reset-MpFolderToMainLibrary {
+    $store = Ensure-ServerMpFolder
+    $serverId = Get-ServerMpFolderId
+    $rec = Get-MpFolderRecord -FolderId $serverId -Store $store
+    if ($rec) {
+        $rec.useMainLibrary = $true
+        $rec.updatedAt = (Get-Date).ToString("o")
+    }
+    Set-ActiveMpFolderForServer $serverId
+    Save-MultiplayerFoldersStore $store
+}
+
+function Get-LibrarySidebarCounts {
+    $counts = @{ Mods = 0; Maps = 0; DLC = 0; Scripts = 0; Favourites = 0 }
+    try {
+        $fav = Get-ModFavoritesStore
+        $counts.Favourites = @($fav.favorites).Count
+    } catch {}
+    $path = $script:Config.modsPath
+    if (-not $path -or -not (Test-Path $path)) { return $counts }
+    $zips = @(Get-ChildItem $path -Filter "*.zip" -ErrorAction SilentlyContinue)
+    $counts.Mods = $zips.Count
+    foreach ($z in $zips) {
+        try {
+            $meta = Resolve-LocalModMeta -LocalFile $z
+            $mt = if ($meta.ModType) { $meta.ModType } else { 'Other' }
+            switch ($mt) {
+                'Map' { $counts.Maps++ }
+                'Script' { $counts.Scripts++ }
+                default {
+                    if ($z.Name -match 'dlc|DLC') { $counts.DLC++ }
+                }
+            }
+        } catch {}
+    }
+    return $counts
+}
+
+function Update-SidebarLibraryCounts {
+    if (-not $txtNavModsBadge) { return }
+    $c = Get-LibrarySidebarCounts
+    if ($txtNavModsBadge) { $txtNavModsBadge.Text = [string]$c.Mods }
+    if ($txtNavMapsBadge) { $txtNavMapsBadge.Text = [string]$c.Maps }
+    if ($txtNavDlcBadge) { $txtNavDlcBadge.Text = [string]$c.DLC }
+    if ($txtNavScriptsBadge) { $txtNavScriptsBadge.Text = [string]$c.Scripts }
+    if ($txtNavFavBadge) { $txtNavFavBadge.Text = [string]$c.Favourites }
+}
+
+function Refresh-MpFoldersPage {
+    if (-not $lstMpFolders) { return }
+    $folders = Get-MpFolderList
+    $lstMpFolders.ItemsSource = $null
+    $lstMpFolders.ItemsSource = $folders
+    $serverId = Get-ServerMpFolderId
+    $active = Get-ActiveMultiplayerFolder
+    if ($cmbMpFolderSelect) {
+        $cmbMpFolderSelect.ItemsSource = $folders
+        $cmbMpFolderSelect.DisplayMemberPath = "Label"
+        if ($active) {
+            $sel = $folders | Where-Object { $_.Id -eq $active.Id } | Select-Object -First 1
+            if ($sel) { $cmbMpFolderSelect.SelectedItem = $sel }
+        }
+        if (-not $cmbMpFolderSelect.SelectedItem -and $folders.Count -gt 0) {
+            $cmbMpFolderSelect.SelectedIndex = 0
+        }
+    }
+    if ($txtMpFolderPath) {
+        $eff = Get-EffectiveModsPath
+        $txtMpFolderPath.Text = if ($eff) { $eff } else { "(nije postavljeno)" }
+    }
+    if ($txtMpFolderJsonPath) {
+        $txtMpFolderJsonPath.Text = $script:MultiplayerFoldersPath
+    }
+    if ($txtMpInFolderCount) {
+        $eff = Get-EffectiveModsPath
+        $n = 0
+        if ($eff -and (Test-Path $eff)) {
+            $n = @(Get-ChildItem $eff -Filter "*.zip" -ErrorAction SilentlyContinue).Count
+        }
+        $txtMpInFolderCount.Text = "$n modova u odabranom folderu"
+    }
+    Update-SidebarLibraryCounts
+    Sync-MpFolderQuickPick
+}
+
+function Sync-MpFolderQuickPick {
+    if (-not $cmbMpFolderQuick) { return }
+    $folders = Get-MpFolderList
+    $favFirst = @($folders | Sort-Object { -not $_.IsFavorite }, Label)
+    $cmbMpFolderQuick.ItemsSource = $favFirst
+    $cmbMpFolderQuick.DisplayMemberPath = "Label"
+    $active = Get-ActiveMultiplayerFolder
+    if ($active) {
+        $sel = $favFirst | Where-Object { $_.Id -eq $active.Id } | Select-Object -First 1
+        if ($sel) { $cmbMpFolderQuick.SelectedItem = $sel }
     }
 }
 
@@ -1643,6 +2030,54 @@ function Start-LauncherFromInstallDir {
         $args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File `"$ps1`""
         Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WorkingDirectory $InstallDir
     }
+}
+
+function New-SRManagerDesktopShortcut {
+    param([string]$InstallDir = (Get-LauncherInstallDir))
+    if (-not $InstallDir -or -not (Test-Path $InstallDir)) { return $false }
+    $ws = New-Object -ComObject WScript.Shell
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $shortcut = $ws.CreateShortcut((Join-Path $desktop 'SR Manager.lnk'))
+    $bat = Join-Path $InstallDir 'Pokreni SR Manager.bat'
+    if (-not (Test-Path $bat)) { $bat = Join-Path $InstallDir 'SR Manager.bat' }
+    if (-not (Test-Path $bat)) { $bat = Join-Path $InstallDir 'SR Manager.vbs' }
+    $shortcut.TargetPath = $bat
+    $shortcut.Arguments = ''
+    $shortcut.WorkingDirectory = $InstallDir
+    $shortcut.Description = 'Slavonska Ravnica - SR Manager'
+    $logo = Join-Path $InstallDir 'sr_logo.ico'
+    if (Test-Path $logo) { $shortcut.IconLocation = "$logo,0" }
+    $shortcut.WindowStyle = 7
+    $shortcut.Save()
+    return $true
+}
+
+function Test-DesktopShortcutNeedsRepair {
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $lnkPath = Join-Path $desktop 'SR Manager.lnk'
+    if (-not (Test-Path $lnkPath)) { return $true }
+    try {
+        $ws = New-Object -ComObject WScript.Shell
+        $sc = $ws.CreateShortcut($lnkPath)
+        $target = [string]$sc.TargetPath
+        if ($target -match '(?i)wscript|powershell') { return $true }
+        if ($target -match '(?i)SRManager\.exe$') { return $true }
+        $bat = Join-Path (Get-LauncherInstallDir) 'Pokreni SR Manager.bat'
+        if ((Test-Path $bat) -and ($target -ne $bat)) { return $true }
+    } catch { return $true }
+    return $false
+}
+
+function Repair-SRManagerDesktopShortcut {
+    try {
+        if (New-SRManagerDesktopShortcut) {
+            Write-Log 'Desktop shortcut azuriran (Pokreni SR Manager.bat).'
+            return $true
+        }
+    } catch {
+        Write-Log "WARN shortcut: $($_.Exception.Message)"
+    }
+    return $false
 }
 
 function Apply-ZipToLatestVersion {
@@ -2981,20 +3416,92 @@ $script:PreloadedLocalModCount = $null
                             <RadioButton x:Name="navMods" Content="Upravitelj modova"
                                          Style="{StaticResource NavBtn}" GroupName="nav"
                                          ToolTip="Grid modova, pretraga, sync i download"/>
-                            <RadioButton x:Name="navIgra" Content="Savegame"
+                            <RadioButton x:Name="navIgra" Content="Konfiguriraj save"
                                          Style="{StaticResource NavBtn}" GroupName="nav"
                                          ToolTip="Savegame slotovi i mod profili (FS25)"/>
+                            <RadioButton x:Name="navMpFolders" Content="Multiplayer folderi"
+                                         Style="{StaticResource NavBtn}" GroupName="nav"
+                                         ToolTip="Dedicated mod folderi po serveru (Phase 1)"/>
                             <TextBlock Text="BIBLIOTEKA" Style="{StaticResource NavSection}" Margin="14,14,0,4"/>
-                            <Button x:Name="btnNavLibraryMods" Content="Katalog modova"
+                            <Button x:Name="btnNavFavorites" Style="{StaticResource BtnFlat}"
+                                    HorizontalContentAlignment="Stretch" Foreground="#888"
+                                    Margin="8,0,8,2" Padding="18,10"
+                                    ToolTip="Favoriti u Upravitelju modova">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="&#x2605; Favoriti" VerticalAlignment="Center"/>
+                                    <Border Grid.Column="1" Background="#222" CornerRadius="8" Padding="6,2" Margin="8,0,0,0">
+                                        <TextBlock x:Name="txtNavFavBadge" Text="0" FontSize="9" Foreground="#F5C518"/>
+                                    </Border>
+                                </Grid>
+                            </Button>
+                            <Button x:Name="btnNavLibraryMods" Style="{StaticResource BtnFlat}"
+                                    HorizontalContentAlignment="Stretch" Foreground="#888"
+                                    Margin="8,0,8,2" Padding="18,10"
+                                    ToolTip="Isti pregled kao Upravitelj modova">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Modovi" VerticalAlignment="Center"/>
+                                    <Border Grid.Column="1" Background="#222" CornerRadius="8" Padding="6,2" Margin="8,0,0,0">
+                                        <TextBlock x:Name="txtNavModsBadge" Text="0" FontSize="9" Foreground="#F5C518"/>
+                                    </Border>
+                                </Grid>
+                            </Button>
+                            <Button x:Name="btnNavMaps" Style="{StaticResource BtnFlat}"
+                                    HorizontalContentAlignment="Stretch" Foreground="#666"
+                                    Margin="8,0,8,2" Padding="18,8" IsEnabled="False"
+                                    ToolTip="Mape iz lokalne biblioteke (uskoro)">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Mape" VerticalAlignment="Center"/>
+                                    <Border Grid.Column="1" Background="#1a1a1a" CornerRadius="8" Padding="6,2" Margin="8,0,0,0">
+                                        <TextBlock x:Name="txtNavMapsBadge" Text="0" FontSize="9" Foreground="#666"/>
+                                    </Border>
+                                </Grid>
+                            </Button>
+                            <Button x:Name="btnNavDlc" Style="{StaticResource BtnFlat}"
+                                    HorizontalContentAlignment="Stretch" Foreground="#666"
+                                    Margin="8,0,8,2" Padding="18,8" IsEnabled="False"
+                                    ToolTip="DLC prepoznavanje (uskoro)">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="DLC" VerticalAlignment="Center"/>
+                                    <Border Grid.Column="1" Background="#1a1a1a" CornerRadius="8" Padding="6,2" Margin="8,0,0,0">
+                                        <TextBlock x:Name="txtNavDlcBadge" Text="0" FontSize="9" Foreground="#666"/>
+                                    </Border>
+                                </Grid>
+                            </Button>
+                            <Button x:Name="btnNavScripts" Style="{StaticResource BtnFlat}"
+                                    HorizontalContentAlignment="Stretch" Foreground="#666"
+                                    Margin="8,0,8,6" Padding="18,8" IsEnabled="False"
+                                    ToolTip="Skripte iz lokalne biblioteke (uskoro)">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Skripte" VerticalAlignment="Center"/>
+                                    <Border Grid.Column="1" Background="#1a1a1a" CornerRadius="8" Padding="6,2" Margin="8,0,0,0">
+                                        <TextBlock x:Name="txtNavScriptsBadge" Text="0" FontSize="9" Foreground="#666"/>
+                                    </Border>
+                                </Grid>
+                            </Button>
+                            <TextBlock Text="ZBIRKE" Style="{StaticResource NavSection}" Margin="14,8,0,4"/>
+                            <Button x:Name="btnNavNewCollection" Content="+ Nova zbirka (uskoro)"
                                     Style="{StaticResource BtnFlat}" HorizontalContentAlignment="Left"
-                                    Foreground="#888" Margin="8,0,8,2" Padding="18,10"
-                                    ToolTip="Isti pregled kao Upravitelj modova"/>
-                            <Button Content="Mape (uskoro)" Style="{StaticResource BtnFlat}"
-                                    HorizontalContentAlignment="Left" Foreground="#444"
-                                    Margin="8,0,8,2" Padding="18,8" IsEnabled="False"/>
-                            <Button Content="Vozila (uskoro)" Style="{StaticResource BtnFlat}"
-                                    HorizontalContentAlignment="Left" Foreground="#444"
-                                    Margin="8,0,8,6" Padding="18,8" IsEnabled="False"/>
+                                    Foreground="#444" Margin="8,0,8,6" Padding="18,8" IsEnabled="False"/>
                             <Border Height="1" Background="#1a1a1a" Margin="12,4,12,8"/>
                             <RadioButton x:Name="navSettings" Content="Postavke"
                                          Style="{StaticResource NavBtn}" GroupName="nav"
@@ -3259,8 +3766,14 @@ $script:PreloadedLocalModCount = $null
                                             <TextBlock Text="BRZI LAUNCH" FontSize="9" Foreground="#666"
                                                        FontWeight="Bold" Margin="0,0,0,6" FontFamily="Segoe UI"/>
                                             <TextBlock Text="Provjera SHA-256, sync modova i pokretanje FS25" FontSize="11"
-                                                       Foreground="#888" FontFamily="Segoe UI" Margin="0,0,0,12"
+                                                       Foreground="#888" FontFamily="Segoe UI" Margin="0,0,0,8"
                                                        TextWrapping="Wrap"/>
+                                            <TextBlock Text="MOD FOLDER" FontSize="9" Foreground="#666"
+                                                       FontWeight="Bold" Margin="0,0,0,4" FontFamily="Segoe UI"/>
+                                            <ComboBox x:Name="cmbMpFolderQuick" Margin="0,0,0,10"
+                                                      Background="#1a1a1a" Foreground="#eee"
+                                                      BorderBrush="#333" Padding="8,6" FontFamily="Segoe UI"
+                                                      ToolTip="Odaberi multiplayer mod folder prije ulaska na server"/>
                                             <Button x:Name="btnJoinServer" Content="Udi na Server"
                                                     Style="{StaticResource BtnPrimary}" HorizontalAlignment="Stretch"
                                                     Padding="14,12" FontSize="14"
@@ -3658,22 +4171,12 @@ $script:PreloadedLocalModCount = $null
                                                      Style="{StaticResource BtnFilter}"/>
                                     </StackPanel>
                                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                        <TextBlock Text="SHOW:" FontSize="10" Foreground="#666" FontWeight="Bold"
+                                        <TextBlock Text="PRIKAZ:" FontSize="10" Foreground="#666" FontWeight="Bold"
                                                    VerticalAlignment="Center" Margin="0,0,10,0" FontFamily="Segoe UI"/>
-                                        <RadioButton x:Name="catAll" Content="Svi modovi" GroupName="modCatFilter"
-                                                     Style="{StaticResource BtnFilter}" IsChecked="True" Margin="0,0,6,0"/>
-                                        <RadioButton x:Name="catVehicle" Content="Vehicle" GroupName="modCatFilter"
-                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                        <RadioButton x:Name="catPlaceable" Content="Placeable" GroupName="modCatFilter"
-                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                        <RadioButton x:Name="catMap" Content="Map" GroupName="modCatFilter"
-                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                        <RadioButton x:Name="catScript" Content="Script" GroupName="modCatFilter"
-                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                        <RadioButton x:Name="catAnimal" Content="Animal" GroupName="modCatFilter"
-                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                        <RadioButton x:Name="catOther" Content="Other" GroupName="modCatFilter"
-                                                     Style="{StaticResource BtnFilter}"/>
+                                        <ComboBox x:Name="cmbModShow" Width="240" MinWidth="200"
+                                                  Background="#1a1a1a" Foreground="#eee" BorderBrush="#333"
+                                                  Padding="10,8" FontFamily="Segoe UI" FontSize="12"
+                                                  DisplayMemberPath="Label"/>
                                     </StackPanel>
                                 </StackPanel>
                             </Grid>
@@ -3780,6 +4283,13 @@ $script:PreloadedLocalModCount = $null
                                                                     </Style>
                                                                 </TextBlock.Style>
                                                             </TextBlock>
+                                                            <Button x:Name="btnModFavorite" Content="{Binding FavoriteStar}"
+                                                                    Width="30" Height="30" Padding="0"
+                                                                    HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                                    Margin="8,8,0,0" Background="#99000000"
+                                                                    BorderThickness="0" Cursor="Hand"
+                                                                    FontSize="17" Foreground="#F5C518"
+                                                                    ToolTip="Dodaj ili ukloni iz favorita"/>
                                                         </Grid>
                                                     </Border>
                                                     <StackPanel Margin="12,10,12,12">
@@ -3860,9 +4370,13 @@ $script:PreloadedLocalModCount = $null
                                     <Grid Margin="0,0,0,8">
                                         <TextBlock Text="Savegame slotovi (FS25)" FontSize="15"
                                                    FontWeight="SemiBold" Foreground="#F5C518" FontFamily="Segoe UI"/>
-                                        <Button x:Name="btnRefreshSavegames" Content="Osvjezi savegame"
-                                                Style="{StaticResource BtnGhost}" HorizontalAlignment="Right"
-                                                VerticalAlignment="Center" Padding="16,8"/>
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                            <Button x:Name="btnSaveWizard" Content="Save wizard"
+                                                    Style="{StaticResource BtnPrimary}" Margin="0,0,8,0"
+                                                    Padding="16,8" ToolTip="Vodic: save, mods folder, postavke (skeleton)"/>
+                                            <Button x:Name="btnRefreshSavegames" Content="Osvjezi savegame"
+                                                    Style="{StaticResource BtnGhost}" Padding="16,8"/>
+                                        </StackPanel>
                                     </Grid>
                                     <TextBlock x:Name="txtIgraSavePath" Text="-"
                                                FontSize="10" Foreground="#888" FontFamily="Segoe UI"
@@ -3906,6 +4420,101 @@ $script:PreloadedLocalModCount = $null
                                 <Button x:Name="btnOpenSaveSlot" Grid.Column="1" Content="Otvori slot u Exploreru"
                                         Style="{StaticResource BtnPrimary}" Padding="20,10"
                                         ToolTip="Otvara odabrani savegame folder (bez izmjene datoteka)"/>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- PAGE: MULTIPLAYER FOLDERS -->
+                    <ScrollViewer x:Name="pageMpFolders" Visibility="Collapsed"
+                                  VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="32,28,32,32" MaxWidth="960">
+                            <Grid Margin="0,0,0,18">
+                                <StackPanel>
+                                    <TextBlock Text="Multiplayer folderi" FontSize="26" FontWeight="Bold"
+                                               Foreground="#f0f0f0" FontFamily="Segoe UI"/>
+                                    <TextBlock Text="Dedicated mod folderi po serveru - Phase 1 (JSON, favoriti, join path)"
+                                               FontSize="12" Foreground="#666" FontFamily="Segoe UI" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <Button x:Name="btnMpRefresh" Content="Osvjezi"
+                                        Style="{StaticResource BtnGhost}" HorizontalAlignment="Right"
+                                        VerticalAlignment="Top" Padding="16,8"/>
+                            </Grid>
+
+                            <Border Background="#161616" CornerRadius="10" Padding="20"
+                                    Margin="0,0,0,14" BorderBrush="#3a2e10" BorderThickness="1">
+                                <StackPanel>
+                                    <TextBlock Text="Brzi odabir foldera" FontSize="15" FontWeight="SemiBold"
+                                               Foreground="#F5C518" FontFamily="Segoe UI" Margin="0,0,0,10"/>
+                                    <ComboBox x:Name="cmbMpFolderSelect"
+                                              Background="#1a1a1a" Foreground="#eee"
+                                              BorderBrush="#333" Padding="10,8" FontFamily="Segoe UI"/>
+                                    <TextBlock x:Name="txtMpFolderPath" Text="" FontSize="10"
+                                               Foreground="#888" FontFamily="Segoe UI" Margin="0,8,0,0"
+                                               TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="txtMpFolderJsonPath" Text="" FontSize="9"
+                                               Foreground="#555" FontFamily="Segoe UI" Margin="0,6,0,0"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
+                            <WrapPanel Margin="0,0,0,14">
+                                <Button x:Name="btnMpCreateFolder" Content="Kreiraj folder"
+                                        Style="{StaticResource BtnPrimary}" Margin="0,0,8,8" Padding="14,10"/>
+                                <Button x:Name="btnMpAddFolder" Content="Dodaj folder"
+                                        Style="{StaticResource BtnGhost}" Margin="0,0,8,8" Padding="14,10"/>
+                                <Button x:Name="btnMpRemoveFolder" Content="Ukloni iz liste"
+                                        Style="{StaticResource BtnGhost}" Margin="0,0,8,8" Padding="14,10"/>
+                                <Button x:Name="btnMpResetMain" Content="Reset na glavnu biblioteku"
+                                        Style="{StaticResource BtnFlat}" Foreground="#888"
+                                        Margin="0,0,8,8" Padding="14,10"/>
+                            </WrapPanel>
+
+                            <Border Background="#161616" CornerRadius="10" Padding="16"
+                                    Margin="0,0,0,14" BorderBrush="#222" BorderThickness="1">
+                                <StackPanel>
+                                    <TextBlock Text="Folderi (JSON)" FontSize="13" FontWeight="SemiBold"
+                                               Foreground="#ccc" FontFamily="Segoe UI" Margin="0,0,0,8"/>
+                                    <ListView x:Name="lstMpFolders" Background="Transparent" BorderThickness="0"
+                                              Foreground="#ddd" FontFamily="Segoe UI" MaxHeight="160">
+                                        <ListView.View>
+                                            <GridView>
+                                                <GridViewColumn Header="" Width="32" DisplayMemberBinding="{Binding FavoriteStar}"/>
+                                                <GridViewColumn Header="Naziv" Width="140" DisplayMemberBinding="{Binding Label}"/>
+                                                <GridViewColumn Header="Putanja" Width="360" DisplayMemberBinding="{Binding Path}"/>
+                                            </GridView>
+                                        </ListView.View>
+                                    </ListView>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#111" CornerRadius="10" Padding="20"
+                                    BorderBrush="#222" BorderThickness="1" MinHeight="200">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,10">
+                                        <TextBlock Text="U ovom folderu" FontSize="15" FontWeight="SemiBold"
+                                                   Foreground="#F5C518" FontFamily="Segoe UI"/>
+                                        <TextBlock x:Name="txtMpInFolderCount" Text="0 modova"
+                                                   HorizontalAlignment="Right" FontSize="11"
+                                                   Foreground="#888" FontFamily="Segoe UI"/>
+                                    </Grid>
+                                    <TextBlock Text="Grid mod kartica s IN FOLDER badgeom - Phase 2. Trenutno: broj .zip datoteka u odabranom folderu."
+                                               FontSize="11" Foreground="#666" TextWrapping="Wrap" FontFamily="Segoe UI"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Grid Margin="0,16,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" VerticalAlignment="Center" FontSize="11"
+                                           Foreground="#666" FontFamily="Segoe UI" TextWrapping="Wrap"
+                                           Text="Primijeni odabir prije synca. Aktiviraj &amp; Launch pokrece isti flow kao Udi na server."/>
+                                <Button x:Name="btnMpApply" Grid.Column="1" Content="Primijeni promjene"
+                                        Style="{StaticResource BtnGhost}" Margin="0,0,10,0" Padding="18,10"/>
+                                <Button x:Name="btnMpActivateLaunch" Grid.Column="2" Content="Aktiviraj i pokreni FS25"
+                                        Style="{StaticResource BtnPrimary}" Padding="18,10"/>
                             </Grid>
                         </StackPanel>
                     </ScrollViewer>
@@ -4478,8 +5087,19 @@ $serverButtonsPanel  = $window.FindName("serverButtonsPanel")
 $navDash             = $window.FindName("navDash")
 $navMods             = $window.FindName("navMods")
 $navIgra             = $window.FindName("navIgra")
+$navMpFolders        = $window.FindName("navMpFolders")
 $navSettings         = $window.FindName("navSettings")
 $navLog              = $window.FindName("navLog")
+$btnNavFavorites     = $window.FindName("btnNavFavorites")
+$txtNavFavBadge      = $window.FindName("txtNavFavBadge")
+$txtNavModsBadge     = $window.FindName("txtNavModsBadge")
+$txtNavMapsBadge     = $window.FindName("txtNavMapsBadge")
+$txtNavDlcBadge      = $window.FindName("txtNavDlcBadge")
+$txtNavScriptsBadge  = $window.FindName("txtNavScriptsBadge")
+$btnNavMaps          = $window.FindName("btnNavMaps")
+$btnNavDlc           = $window.FindName("btnNavDlc")
+$btnNavScripts       = $window.FindName("btnNavScripts")
+$btnNavNewCollection = $window.FindName("btnNavNewCollection")
 $btnAdminToggle      = $window.FindName("btnAdminToggle")
 $txtVersion          = $window.FindName("txtVersion")
 $pageDash            = $window.FindName("pageDash")
@@ -4571,11 +5191,13 @@ $txtIgraSavePath     = $window.FindName("txtIgraSavePath")
 $txtIgraSaveHint     = $window.FindName("txtIgraSaveHint")
 $btnRefreshSavegames = $window.FindName("btnRefreshSavegames")
 $btnOpenSaveSlot     = $window.FindName("btnOpenSaveSlot")
+$btnSaveWizard       = $window.FindName("btnSaveWizard")
 $filterAll           = $window.FindName("filterAll")
 $filterServer        = $window.FindName("filterServer")
 $filterMissing       = $window.FindName("filterMissing")
 $filterExtra         = $window.FindName("filterExtra")
 $filterLocal         = $window.FindName("filterLocal")
+$cmbModShow          = $window.FindName("cmbModShow")
 $btnRescanMods       = $window.FindName("btnRescanMods")
 $btnNavLibraryMods   = $window.FindName("btnNavLibraryMods")
 $walkthroughOverlay  = $window.FindName("walkthroughOverlay")
@@ -4669,6 +5291,7 @@ function Set-Page {
     $pageDash.Visibility = 'Collapsed'
     $pageMods.Visibility = 'Collapsed'
     $pageIgra.Visibility = 'Collapsed'
+    $pageMpFolders.Visibility = 'Collapsed'
     $pageSettings.Visibility = 'Collapsed'
     $pageLog.Visibility = 'Collapsed'
     $target = $null
@@ -4676,6 +5299,7 @@ function Set-Page {
         'dash'     { $pageDash.Visibility = 'Visible'; $target = $pageDash }
         'mods'     { $pageMods.Visibility = 'Visible'; $target = $pageMods }
         'igra'     { $pageIgra.Visibility = 'Visible'; $target = $pageIgra }
+        'mpfolders'{ $pageMpFolders.Visibility = 'Visible'; $target = $pageMpFolders }
         'settings' { $pageSettings.Visibility = 'Visible'; $target = $pageSettings }
         'log'      { $pageLog.Visibility = 'Visible'; $target = $pageLog }
     }
@@ -4722,6 +5346,10 @@ $navIgra.Add_Checked({
     if ($txtModProfilePath) { $txtModProfilePath.Text = $script:ModProfilesPath }
     Refresh-IgraPage
 })
+$navMpFolders.Add_Checked({
+    Set-Page 'mpfolders'
+    Refresh-MpFoldersPage
+})
 $navSettings.Add_Checked({
     Set-Page 'settings'
     $gs = Read-GameSettings
@@ -4762,9 +5390,160 @@ if ($cmbModProfiles) {
     })
 }
 
+if ($btnNavFavorites) {
+    $btnNavFavorites.Add_Click({
+        $navMods.IsChecked = $true
+        if ($cmbModShow) {
+            $items = @($cmbModShow.ItemsSource)
+            $fav = $items | Where-Object { $_.Key -eq 'Favourites' } | Select-Object -First 1
+            if ($fav) { $cmbModShow.SelectedItem = $fav }
+        }
+        Apply-ModFilter 'Favourites'
+    })
+}
 if ($btnNavLibraryMods) {
     $btnNavLibraryMods.Add_Click({
         $navMods.IsChecked = $true
+    })
+}
+
+function Apply-SelectedMpFolder {
+    param($Item)
+    if (-not $Item -or -not $Item.Id) { return }
+    $store = Get-MultiplayerFoldersStore
+    $rec = Get-MpFolderRecord -FolderId $Item.Id -Store $store
+    if ($rec) { $rec.useMainLibrary = $false }
+    Set-ActiveMpFolderForServer $Item.Id
+    Save-MultiplayerFoldersStore $store
+    Refresh-MpFoldersPage
+}
+
+if ($cmbMpFolderQuick) {
+    $cmbMpFolderQuick.Add_SelectionChanged({
+        if ($script:MpFolderComboUpdating) { return }
+        $item = $cmbMpFolderQuick.SelectedItem
+        if ($item) { Apply-SelectedMpFolder $item }
+    })
+}
+if ($cmbMpFolderSelect) {
+    $cmbMpFolderSelect.Add_SelectionChanged({
+        if ($script:MpFolderComboUpdating) { return }
+        $item = $cmbMpFolderSelect.SelectedItem
+        if ($item) {
+            $script:MpFolderComboUpdating = $true
+            try {
+                if ($cmbMpFolderQuick) { $cmbMpFolderQuick.SelectedItem = $item }
+            } finally { $script:MpFolderComboUpdating = $false }
+        }
+    })
+}
+if ($btnMpApply) {
+    $btnMpApply.Add_Click({
+        $item = if ($cmbMpFolderSelect) { $cmbMpFolderSelect.SelectedItem } else { $null }
+        if (-not $item) {
+            Show-SRDialog "Odaberi folder u listi." "Multiplayer folderi" "Warning"
+            return
+        }
+        Apply-SelectedMpFolder $item
+        try { Show-Toast "Mod folder primijenjen: $($item.Label)" "success" } catch {}
+    })
+}
+if ($btnMpActivateLaunch) {
+    $btnMpActivateLaunch.Add_Click({
+        $item = if ($cmbMpFolderSelect) { $cmbMpFolderSelect.SelectedItem } else { $null }
+        if ($item) { Apply-SelectedMpFolder $item }
+        Join-Server
+    })
+}
+if ($btnMpRefresh) {
+    $btnMpRefresh.Add_Click({ Refresh-MpFoldersPage; try { Show-Toast "Folderi osvjezeni" "success" } catch {} })
+}
+if ($btnMpResetMain) {
+    $btnMpResetMain.Add_Click({
+        Reset-MpFolderToMainLibrary
+        Refresh-MpFoldersPage
+        try { Show-Toast "Koristi se glavna biblioteka modova" "success" } catch {}
+    })
+}
+if ($btnMpCreateFolder) {
+    $btnMpCreateFolder.Add_Click({
+        Ensure-ServerMpFolder | Out-Null
+        $id = Get-ServerMpFolderId
+        $store = Get-MultiplayerFoldersStore
+        $rec = Get-MpFolderRecord -FolderId $id -Store $store
+        if (-not $rec) { return }
+        $path = [string]$rec.path
+        if (-not $path) {
+            $parent = if ($script:Config.modsPath) { Split-Path $script:Config.modsPath -Parent } else { $env:USERPROFILE }
+            $srv = Get-ActiveServer
+            $slug = ($srv.name -replace '[^a-zA-Z0-9]', '')
+            if (-not $slug) { $slug = "Server$($script:Config.activeServer)" }
+            $path = Join-Path $parent "SR-Mods-$slug"
+        }
+        if (-not (Test-Path $path)) {
+            New-Item -ItemType Directory -Path $path -Force | Out-Null
+            Write-Log "Kreiran folder: $path"
+        }
+        $rec.path = $path
+        $rec.useMainLibrary = $false
+        $rec.updatedAt = (Get-Date).ToString("o")
+        Save-MultiplayerFoldersStore $store
+        Set-ActiveMpFolderForServer $id
+        Refresh-MpFoldersPage
+        try { Show-Toast "Folder spreman" "success" } catch {}
+    })
+}
+if ($btnMpAddFolder) {
+    $btnMpAddFolder.Add_Click({
+        $d = New-Object System.Windows.Forms.FolderBrowserDialog
+        $eff = Get-EffectiveModsPath
+        if ($eff -and (Test-Path $eff)) { $d.SelectedPath = $eff }
+        elseif ($script:Config.modsPath) { $d.SelectedPath = $script:Config.modsPath }
+        if ($d.ShowDialog() -ne 'OK') { return }
+        $path = $d.SelectedPath
+        $store = Ensure-ServerMpFolder
+        $id = Get-ServerMpFolderId
+        $rec = Get-MpFolderRecord -FolderId $id -Store $store
+        if ($rec) {
+            $rec.path = $path
+            $rec.useMainLibrary = $false
+            $rec.label = Split-Path $path -Leaf
+            $rec.updatedAt = (Get-Date).ToString("o")
+        }
+        Save-MultiplayerFoldersStore $store
+        Set-ActiveMpFolderForServer $id
+        Refresh-MpFoldersPage
+        try { Show-Toast "Folder dodan" "success" } catch {}
+    })
+}
+if ($btnMpRemoveFolder) {
+    $btnMpRemoveFolder.Add_Click({
+        $sel = $lstMpFolders.SelectedItem
+        if (-not $sel) {
+            Show-SRDialog "Odaberi folder u listi." "Multiplayer folderi" "Warning"
+            return
+        }
+        $r = Show-SRConfirm "Ukloniti '$($sel.Label)' iz liste?`n(Datoteke na disku ostaju.)" "Potvrda"
+        if ($r -ne 'Yes') { return }
+        $store = Get-MultiplayerFoldersStore
+        $folders = @{}
+        if ($store.folders) {
+            $store.folders.PSObject.Properties | ForEach-Object {
+                if ($_.Name -ne $sel.Id) { $folders[$_.Name] = $_.Value }
+            }
+        }
+        $store.folders = $folders
+        Save-MultiplayerFoldersStore $store
+        Ensure-ServerMpFolder | Out-Null
+        Refresh-MpFoldersPage
+    })
+}
+if ($lstMpFolders) {
+    $lstMpFolders.Add_MouseDoubleClick({
+        $sel = $lstMpFolders.SelectedItem
+        if (-not $sel) { return }
+        Set-MpFolderFavorite -FolderId $sel.Id -Favorite (-not $sel.IsFavorite)
+        Refresh-MpFoldersPage
     })
 }
 
@@ -4884,6 +5663,235 @@ if ($chkHideWalkthrough) {
         $ws.skipOnLaunch = $false
         Save-WalkthroughSettings $ws
     })
+}
+
+# ============================================================
+# SAVE WIZARD (Hub-style skeleton)
+# ============================================================
+function Show-SaveWizard {
+    $dlg = New-Object System.Windows.Window
+    $dlg.Title = 'Save wizard'
+    $dlg.Width = 560
+    $dlg.SizeToContent = 'Height'
+    $dlg.WindowStartupLocation = 'CenterOwner'
+    $dlg.Owner = $window
+    $dlg.WindowStyle = 'None'
+    $dlg.AllowsTransparency = $true
+    $dlg.Background = [System.Windows.Media.Brushes]::Transparent
+    $dlg.ShowInTaskbar = $false
+    $dlg.ResizeMode = 'NoResize'
+
+    $outer = New-Object System.Windows.Controls.Border
+    $outer.CornerRadius = '12'
+    $outer.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#121212')
+    $outer.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F5C518')
+    $outer.BorderThickness = '1'
+    $outer.Padding = '24,22'
+    $sp = New-Object System.Windows.Controls.StackPanel
+
+    $ttl = New-Object System.Windows.Controls.TextBlock
+    $ttl.Text = 'SAVE WIZARD'
+    $ttl.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F5C518')
+    $ttl.FontSize = 18
+    $ttl.FontWeight = 'Bold'
+    $ttl.FontFamily = New-Object System.Windows.Media.FontFamily('Segoe UI')
+    $sp.Children.Add($ttl) | Out-Null
+
+    $stepLbl = New-Object System.Windows.Controls.TextBlock
+    $stepLbl.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#888')
+    $stepLbl.FontSize = 11
+    $stepLbl.Margin = '0,6,0,14'
+    $stepLbl.FontFamily = New-Object System.Windows.Media.FontFamily('Segoe UI')
+    $sp.Children.Add($stepLbl) | Out-Null
+
+    $body = New-Object System.Windows.Controls.TextBlock
+    $body.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#ccc')
+    $body.FontSize = 12
+    $body.TextWrapping = 'Wrap'
+    $body.Margin = '0,0,0,10'
+    $body.FontFamily = New-Object System.Windows.Media.FontFamily('Segoe UI')
+    $sp.Children.Add($body) | Out-Null
+
+    $contentHost = New-Object System.Windows.Controls.StackPanel
+    $contentHost.Margin = '0,0,0,12'
+    $sp.Children.Add($contentHost) | Out-Null
+
+    $lstSaves = New-Object System.Windows.Controls.ListBox
+    $lstSaves.MaxHeight = 200
+    $lstSaves.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0d0d0d')
+    $lstSaves.Foreground = [System.Windows.Media.Brushes]::White
+    $lstSaves.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#333')
+    $lstSaves.DisplayMemberPath = 'DisplayLine'
+    $lstSaves.Visibility = 'Collapsed'
+
+    $txtMods = New-Object System.Windows.Controls.TextBox
+    $txtMods.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#1a1a1a')
+    $txtMods.Foreground = [System.Windows.Media.Brushes]::White
+    $txtMods.Padding = '10,8'
+    $txtMods.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#333')
+    $txtMods.Visibility = 'Collapsed'
+
+    $chkBackup = New-Object System.Windows.Controls.CheckBox
+    $chkBackup.Content = 'Napravi backup prije promjena (preporuceno)'
+    $chkBackup.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#aaa')
+    $chkBackup.IsChecked = $true
+    $chkBackup.Visibility = 'Collapsed'
+    $chkBackup.Margin = '0,0,0,8'
+    $chkBackup.FontFamily = New-Object System.Windows.Media.FontFamily('Segoe UI')
+
+    $contentHost.Children.Add($lstSaves) | Out-Null
+    $contentHost.Children.Add($txtMods) | Out-Null
+    $contentHost.Children.Add($chkBackup) | Out-Null
+
+    $bp = New-Object System.Windows.Controls.StackPanel
+    $bp.Orientation = 'Horizontal'
+    $bp.HorizontalAlignment = 'Right'
+
+    $btnCancel = New-Object System.Windows.Controls.Button
+    $btnCancel.Content = 'Odustani'
+    $btnCancel.Padding = '14,8'
+    $btnCancel.Margin = '0,0,8,0'
+    $btnCancel.Cursor = 'Hand'
+    $btnCancel.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#222')
+    $btnCancel.Foreground = [System.Windows.Media.Brushes]::White
+    $btnCancel.BorderThickness = '0'
+
+    $btnBack = New-Object System.Windows.Controls.Button
+    $btnBack.Content = 'Natrag'
+    $btnBack.Padding = '14,8'
+    $btnBack.Margin = '0,0,8,0'
+    $btnBack.Cursor = 'Hand'
+    $btnBack.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#222')
+    $btnBack.Foreground = [System.Windows.Media.Brushes]::White
+    $btnBack.BorderThickness = '0'
+    $btnBack.Visibility = 'Collapsed'
+
+    $btnNext = New-Object System.Windows.Controls.Button
+    $btnNext.Content = 'Dalje'
+    $btnNext.Padding = '18,8'
+    $btnNext.Cursor = 'Hand'
+    $btnNext.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F5C518')
+    $btnNext.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#111')
+    $btnNext.FontWeight = 'Bold'
+    $btnNext.BorderThickness = '0'
+
+    $bp.Children.Add($btnCancel) | Out-Null
+    $bp.Children.Add($btnBack) | Out-Null
+    $bp.Children.Add($btnNext) | Out-Null
+    $sp.Children.Add($bp) | Out-Null
+    $outer.Child = $sp
+    $dlg.Content = $outer
+
+    $state = @{
+        Step         = 1
+        SelectedSave = $null
+        ModsPath     = if ($script:Config.modsPath) { [string]$script:Config.modsPath } else { '' }
+    }
+
+    $render = {
+        $s = $state.Step
+        $stepLbl.Text = "Korak $s / 6"
+        $lstSaves.Visibility = 'Collapsed'
+        $txtMods.Visibility = 'Collapsed'
+        $chkBackup.Visibility = 'Collapsed'
+        $btnBack.Visibility = if ($s -gt 1) { 'Visible' } else { 'Collapsed' }
+        $btnNext.Content = if ($s -ge 6) { 'Zavrsi' } else { 'Dalje' }
+        switch ($s) {
+            1 {
+                $body.Text = 'Odaberi FS25 savegame slot:'
+                $lstSaves.Visibility = 'Visible'
+                $items = @()
+                foreach ($sg in @(Get-FS25SavegameList)) {
+                    $label = if ($sg.Name) { $sg.Name } else { "Slot $($sg.Slot)" }
+                    $items += [PSCustomObject]@{
+                        DisplayLine = "Slot $($sg.Slot): $label | $($sg.MapTitle) | $($sg.SizeMb) MB"
+                        SaveInfo    = $sg
+                    }
+                }
+                $lstSaves.ItemsSource = $items
+                if ($state.SelectedSave) {
+                    $match = $items | Where-Object { $_.SaveInfo.Slot -eq $state.SelectedSave.Slot } | Select-Object -First 1
+                    if ($match) { $lstSaves.SelectedItem = $match }
+                }
+            }
+            2 {
+                $body.Text = 'Mods folder za ovaj profil (gameSettings.xml sync u kasnijim koracima):'
+                $txtMods.Visibility = 'Visible'
+                $txtMods.Text = $state.ModsPath
+            }
+            3 {
+                $body.Text = 'Postavke savea (careerSavegame.xml) - skeleton. Backup prije uredivanja.'
+                $chkBackup.Visibility = 'Visible'
+            }
+            4 {
+                $body.Text = 'Mod loadout (profil modova) - skeleton. Povezivanje s mod-profiles.json kasnije.'
+            }
+            5 {
+                $body.Text = 'Potvrda - skeleton. Backup + primjena u sljedecoj verziji.'
+                $chkBackup.Visibility = 'Visible'
+            }
+            6 {
+                $body.Text = 'Zavrsni pregled:'
+                $sel = if ($state.SelectedSave) { "Slot $($state.SelectedSave.Slot) - $($state.SelectedSave.Name)" } else { '(nije odabran)' }
+                $body.Text += "`nSave: $sel`nMods: $($state.ModsPath)`nBackup: $(if ($chkBackup.IsChecked) { 'da' } else { 'ne' })"
+                $chkBackup.Visibility = 'Visible'
+            }
+        }
+    }.GetNewClosure()
+
+    $btnCancel.Add_Click({ $dlg.Close() })
+    $btnBack.Add_Click({
+        if ($state.Step -gt 1) { $state.Step--; & $render }
+    })
+    $btnNext.Add_Click({
+        if ($state.Step -eq 1) {
+            if (-not $lstSaves.SelectedItem) {
+                Show-SRDialog 'Odaberi savegame slot u listi.' 'Save wizard' 'Warning'
+                return
+            }
+            $state.SelectedSave = $lstSaves.SelectedItem.SaveInfo
+        }
+        if ($state.Step -eq 2) {
+            $state.ModsPath = $txtMods.Text.Trim()
+            if ($state.ModsPath -and -not (Test-Path $state.ModsPath)) {
+                $r = Show-SRConfirm "Folder ne postoji:`n$($state.ModsPath)`n`nNastaviti?" 'Save wizard' 'Da' 'Ne'
+                if ($r -ne 'Yes') { return }
+            }
+        }
+        if ($state.Step -ge 6) {
+            if ($chkBackup.IsChecked -and $state.SelectedSave -and $state.SelectedSave.Folder -and (Test-Path $state.SelectedSave.Folder)) {
+                try {
+                    $bakRoot = Join-Path $env:APPDATA 'SR-Launcher\save-backups'
+                    if (-not (Test-Path $bakRoot)) { New-Item -ItemType Directory -Path $bakRoot -Force | Out-Null }
+                    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+                    $dest = Join-Path $bakRoot "savegame$($state.SelectedSave.Slot)_$stamp"
+                    Copy-Item $state.SelectedSave.Folder $dest -Recurse -Force
+                    Write-Log "Save wizard backup: $dest"
+                    try { Show-Toast "Backup spremljen" 'success' } catch {}
+                } catch {
+                    Show-SRDialog "Backup nije uspio:`n$($_.Exception.Message)" 'Save wizard' 'Warning'
+                    return
+                }
+            }
+            if ($state.ModsPath) {
+                $script:Config.modsPath = $state.ModsPath
+                if ($txtModsPath) { $txtModsPath.Text = $state.ModsPath }
+                Save-Config
+            }
+            $dlg.Close()
+            try { Show-Toast 'Save wizard zavrsen (skeleton koraci 3-5 uskoro)' 'success' 4500 } catch {}
+            return
+        }
+        $state.Step++
+        & $render
+    })
+
+    & $render
+    $dlg.ShowDialog() | Out-Null
+}
+
+if ($btnSaveWizard) {
+    $btnSaveWizard.Add_Click({ Show-SaveWizard })
 }
 
 # ============================================================
@@ -5014,6 +6022,11 @@ function Update-ServerButtons {
             Refresh-ServerStatus
             if ($script:IsAdmin) { Load-ServerToForm }
             Write-Log "Server: $($script:Config.servers[$idx].name)"
+            try {
+                Ensure-ServerMpFolder | Out-Null
+                Sync-MpFolderQuickPick
+                Refresh-MpFoldersPage
+            } catch {}
         })
         # Desni klik: brisi custom server
         $bd.Add_MouseRightButtonUp({
@@ -5188,13 +6201,8 @@ function Get-CurrentFilter {
 }
 
 function Get-CurrentModCategoryFilter {
-    if ($catVehicle.IsChecked)   { return 'Vehicle' }
-    if ($catPlaceable.IsChecked) { return 'Placeable' }
-    if ($catMap.IsChecked)       { return 'Map' }
-    if ($catScript.IsChecked)    { return 'Script' }
-    if ($catAnimal.IsChecked)    { return 'Animal' }
-    if ($catOther.IsChecked)     { return 'Other' }
-    return 'All'
+    if (-not $cmbModShow -or -not $cmbModShow.SelectedItem) { return 'All' }
+    return [string]$cmbModShow.SelectedItem.Key
 }
 
 function Apply-ModFilter {
@@ -5203,6 +6211,7 @@ function Apply-ModFilter {
         $filter = Get-CurrentFilter
         $CategoryFilter = Get-CurrentModCategoryFilter
     }
+    Sync-ModFavoriteFlags
     $searchText = if ($txtModSearch -and $txtModSearch.Text) { $txtModSearch.Text.Trim().ToLower() } else { "" }
     $filtered = New-Object System.Collections.ArrayList
     foreach ($item in $script:AllModItems) {
@@ -5213,7 +6222,10 @@ function Apply-ModFilter {
             "Local"   { $item.Local -eq "Da" }
             default   { $true }
         }
-        if ($show -and $CategoryFilter -ne 'All') {
+        if ($show -and $CategoryFilter -eq 'Favourites') {
+            $show = [bool]$item.IsFavorite
+        }
+        elseif ($show -and $CategoryFilter -ne 'All') {
             $mt = if ($item.ModType) { $item.ModType } else { 'Other' }
             $show = ($mt -eq $CategoryFilter)
         }
@@ -5227,7 +6239,7 @@ function Apply-ModFilter {
     if ($txtModsVisible) { $txtModsVisible.Text = "$($sorted.Count)" }
     if ($txtModSubtitle) {
         $sub = "Prikazano $($sorted.Count) modova"
-        if ($CategoryFilter -ne 'All') { $sub += " | kategorija: $CategoryFilter" }
+        if ($CategoryFilter -ne 'All') { $sub += " | $(Get-ModCategoryHrLabel $CategoryFilter)" }
         if ($searchText) { $sub += " | pretraga: '$searchText'" }
         $txtModSubtitle.Text = $sub
     }
@@ -5355,7 +6367,7 @@ function Refresh-ModList {
     $script:AllModItems = @()
     if (-not $PreloadedServerMods) { $script:ModListCached = $false }
 
-    $modsPath = $script:Config.modsPath
+    $modsPath = Get-EffectiveModsPath
     $localMods = @()
     if ($modsPath -and (Test-Path $modsPath)) {
         $localMods = @(Get-ChildItem $modsPath -Filter "*.zip" -ErrorAction SilentlyContinue)
@@ -5520,11 +6532,12 @@ function Refresh-ModList {
         } catch {}
     }
     $script:ModListCached = $true
+    Update-ModShowCombo
     Apply-ModFilter (Get-CurrentFilter)
 }
 
 function Download-MissingMods {
-    $modsPath = $script:Config.modsPath
+    $modsPath = Get-EffectiveModsPath
     if (-not $modsPath) {
         Write-Log "GRESKA: Putanja modova nije postavljena."
         return
@@ -5657,10 +6670,17 @@ function Join-Server {
         } catch { Write-Log "GRESKA password: $($_.Exception.Message)" }
     }
 
-    # Automatski sync mods folder u gameSettings.xml
-    $modsPath = $script:Config.modsPath
+    # Automatski sync mods folder u gameSettings.xml (multiplayer folder ako je odabran)
+    $modsPath = Get-EffectiveModsPath
     if ($modsPath) {
+        if (-not (Test-Path $modsPath)) {
+            New-Item -ItemType Directory -Path $modsPath -Force | Out-Null
+            Write-Log "Kreiran multiplayer mod folder: $modsPath"
+        }
         Update-ModsDirectoryOverride $modsPath | Out-Null
+        $af = Get-ActiveMultiplayerFolder
+        $afLbl = if ($af -and $af.Label) { $af.Label } else { 'glavna biblioteka' }
+        Write-Log "modsDirectoryOverride: $modsPath ($afLbl)"
     }
 
     # Provjera verzije igre vs. server
@@ -6011,13 +7031,42 @@ $filterServer.Add_Checked({ Apply-ModFilter "Server" })
 $filterMissing.Add_Checked({ Apply-ModFilter "Missing" })
 $filterExtra.Add_Checked({ Apply-ModFilter "Extra" })
 $filterLocal.Add_Checked({ Apply-ModFilter "Local" })
-$catAll.Add_Checked({ Apply-ModFilter })
-$catVehicle.Add_Checked({ Apply-ModFilter })
-$catPlaceable.Add_Checked({ Apply-ModFilter })
-$catMap.Add_Checked({ Apply-ModFilter })
-$catScript.Add_Checked({ Apply-ModFilter })
-$catAnimal.Add_Checked({ Apply-ModFilter })
-$catOther.Add_Checked({ Apply-ModFilter })
+if ($cmbModShow) {
+    $cmbModShow.Add_SelectionChanged({
+        if ($script:ModShowComboUpdating) { return }
+        Apply-ModFilter
+    })
+}
+
+if ($lstMods) {
+    $lstMods.AddHandler([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent, [System.Windows.RoutedEventHandler]{
+        param($sender, $e)
+        $btn = $e.OriginalSource
+        if (-not $btn -or $btn.Name -ne 'btnModFavorite') { return }
+        $item = $null
+        try {
+            $el = $btn
+            while ($null -ne $el) {
+                if ($el -is [System.Windows.Controls.ListBoxItem]) {
+                    $item = $el.DataContext
+                    break
+                }
+                $el = [System.Windows.Media.VisualTreeHelper]::GetParent($el)
+            }
+        } catch {}
+        if (-not $item) { $item = $lstMods.SelectedItem }
+        if (-not $item) { return }
+        $newFav = -not [bool]$item.IsFavorite
+        Set-ModFavorite -Item $item -Favorite $newFav
+        Update-ModShowCombo
+        Apply-ModFilter
+        try {
+            $msg = if ($newFav) { 'Dodano u favorite' } else { 'Uklonjeno iz favorita' }
+            Show-Toast "$msg : $($item.Name)" 'info' 2000
+        } catch {}
+        $e.Handled = $true
+    }, $true)
+}
 
 # Game Options event handlers - auto-save on toggle click
 $chkIntroScene.Add_Checked({
@@ -6094,6 +7143,13 @@ Update-ServerButtons
 Write-Log "Slavonska Ravnica Launcher v$($script:AppVersion)"
 Write-Log "Game: $($script:Config.gamePath)"
 Write-Log "Mods: $($script:Config.modsPath)"
+try {
+    $eff = Get-EffectiveModsPath
+    if ($eff -and $eff -ne $script:Config.modsPath) { Write-Log "Multiplayer mod folder: $eff" }
+    Ensure-ServerMpFolder | Out-Null
+    Update-SidebarLibraryCounts
+    Sync-MpFolderQuickPick
+} catch {}
 Write-Log "Serveri: $($script:Config.servers.Count)"
 Write-Log "GitHub: $($script:GitHubRepo)"
 Write-Log "gameSettings.xml: $(Get-GameSettingsPath)"
@@ -6701,6 +7757,11 @@ $window.Add_Loaded({
             if ($walkthroughOverlay) {
                 $wt = Get-WalkthroughSettings
                 if (-not $wt.skipOnLaunch) { Show-WalkthroughOverlay }
+            }
+        } catch {}
+        try {
+            if (Test-DesktopShortcutNeedsRepair) {
+                Repair-SRManagerDesktopShortcut | Out-Null
             }
         } catch {}
     }) | Out-Null
