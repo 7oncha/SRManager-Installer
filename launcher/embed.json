@@ -1,6 +1,6 @@
 ﻿{
-    "url":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.3.0.0/SR_Manager.zip",
-    "downloadUrl":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.3.0.0/SR_Manager.zip",
+    "url":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.3.0.1/SR_Manager.zip",
+    "downloadUrl":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.3.0.1/SR_Manager.zip",
     "description":  "Skini **SR_Manager.zip**, raspakiraj i pokreni **Pokreni SR Manager.bat** (ili SR Manager.vbs).\n\n**NE** pokreci SRManager.exe - to je stari installer.\n\nProblem? **TEST-POKRENI.bat**",
     "color":  16056599,
     "downloadFile":  "SR_Manager.zip",
@@ -9,7 +9,7 @@
                    {
                        "inline":  true,
                        "name":  "Verzija",
-                       "value":  "v2.3.0.0"
+                       "value":  "v2.3.0.1"
                    },
                    {
                        "inline":  true,

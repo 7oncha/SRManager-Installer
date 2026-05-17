@@ -68,7 +68,7 @@ try {
 # ============================================================
 # CONSTANTS
 # ============================================================
-$script:AppVersion = "2.3.0.0"
+$script:AppVersion = "2.3.0.1"
 $script:ConfigPath = Join-Path $PSScriptRoot "sr_config.json"
 $script:IsAdmin = $false
 $script:GitHubRepo = ""
@@ -3174,6 +3174,7 @@ function Show-SplashScreen {
     $script:SplashProgress = $progressFill
     $script:SplashWindow = $splash
     $script:SplashMaxWidth = 360
+    Initialize-WpfApplicationLifecycle
 
     return $splash
 }
@@ -3198,6 +3199,17 @@ function Set-SplashStep {
     param([string]$Message, [int]$Percent)
     Update-Splash -msg $Message -pct $Percent
     Invoke-SplashPump
+}
+
+# WPF default ShutdownMode=OnLastWindowClose gasi proces kad se splash zatvori
+# prije ShowDialog glavnog prozora (regresija nakon v2.3 splash flowa).
+function Initialize-WpfApplicationLifecycle {
+    try {
+        $app = [System.Windows.Application]::Current
+        if ($app) {
+            $app.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
+        }
+    } catch {}
 }
 
 function Close-StartupSplash {
@@ -9410,7 +9422,7 @@ Set-SplashStep "Ucitavam opcije igre..." 86
 try { $script:PreloadedGameSettings = Read-GameSettings } catch {}
 Invoke-SplashPump
 Set-SplashStep "Pokrecem..." 100
-Close-StartupSplash
+Initialize-WpfApplicationLifecycle
 
 # ============================================================
 # AUTO-UPDATE PROMPT (provjera u pozadini nakon prikaza prozora)
@@ -9466,4 +9478,7 @@ try {
     }
 } catch {}
 
+# Prikaži glavni prozor prije zatvaranja splasha (inače OnLastWindowClose može ugasiti app).
+$window.Show()
+Close-StartupSplash
 $window.ShowDialog() | Out-Null
