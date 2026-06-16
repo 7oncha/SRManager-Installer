@@ -488,37 +488,31 @@ Describe 'Format-MpFolderDisplayLabel' {
 # Convert-Rgb565ToArgb
 # ============================================================
 Describe 'Convert-Rgb565ToArgb' {
-    # NAPOMENA: Na PS Core, [byte] -shl 24 ne promovira u Int32, pa alpha=255 daje 0.
-    # Na Windows PS 5.1 (target runtime) radi ispravno. Testiramo RGB kanale koji
-    # rade konzistentno na obje platforme.
-    It 'cista crvena (0xF800) ima R=255' {
+    # PS Core ne podrzava [uint32]0xFF... literal (hex overflow), koristimo decimalne vrijednosti
+    It 'konvertira crnu boju (0x0000) na ARGB s alpha=255' {
+        $argb = Convert-Rgb565ToArgb -C ([uint16]0x0000)
+        $argb | Should -BeOfType [uint32]
+        $argb | Should -Be 4278190080  # 0xFF000000
+    }
+    It 'konvertira bijelu boju (0xFFFF) na puni ARGB' {
+        $argb = Convert-Rgb565ToArgb -C ([uint16]0xFFFF)
+        $argb | Should -Be 4294967295  # 0xFFFFFFFF
+    }
+    It 'cista crvena (0xF800) ima R=255, G=0, B=0' {
         $argb = Convert-Rgb565ToArgb -C ([uint16]0xF800)
-        $r = ([uint32]$argb -shr 16) -band 0xFF
-        $r | Should -Be 255
+        $argb | Should -Be 4294901760  # 0xFFFF0000
     }
     It 'cista zelena (0x07E0) ima G=255' {
         $argb = Convert-Rgb565ToArgb -C ([uint16]0x07E0)
-        $g = ([uint32]$argb -shr 8) -band 0xFF
-        $g | Should -Be 255
+        $argb | Should -Be 4278255360  # 0xFF00FF00
     }
     It 'cista plava (0x001F) ima B=255' {
         $argb = Convert-Rgb565ToArgb -C ([uint16]0x001F)
-        $b = [uint32]$argb -band 0xFF
-        $b | Should -Be 255
+        $argb | Should -Be 4278190335  # 0xFF0000FF
     }
-    It 'crna boja (0x0000) ima sve RGB kanale na 0' {
-        $argb = Convert-Rgb565ToArgb -C ([uint16]0x0000)
-        $rgb = [uint32]$argb -band 0x00FFFFFF
-        $rgb | Should -Be 0
-    }
-    It 'bijela boja (0xFFFF) ima sve RGB kanale na 255' {
-        $argb = Convert-Rgb565ToArgb -C ([uint16]0xFFFF)
-        $r = ([uint32]$argb -shr 16) -band 0xFF
-        $g = ([uint32]$argb -shr 8) -band 0xFF
-        $b = [uint32]$argb -band 0xFF
-        $r | Should -Be 255
-        $g | Should -Be 255
-        $b | Should -Be 255
+    It 'podrzava custom alpha vrijednost' {
+        $argb = Convert-Rgb565ToArgb -C ([uint16]0x0000) -A ([byte]128)
+        $argb | Should -Be 2147483648  # 0x80000000
     }
 }
 
