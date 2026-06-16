@@ -16,7 +16,7 @@ RequestExecutionLevel user
 Unicode True
 
 ; ---- Verzija (azuriraj za svaki release) ----
-!define VERSION "2.3.0.1"
+!define VERSION "2.4.0.0"
 !define PUBLISHER "Slavonska Ravnica"
 !define WEBSITE "https://discord.gg/slavonskaravnica"
 
@@ -35,7 +35,8 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "SR Manager - Instalacija"
 !define MUI_WELCOMEPAGE_TEXT "Ovaj program ce instalirati SR Manager (Slavonska Ravnica launcher za FS25) na tvoj racunal.$\r$\n$\r$\nPreporucamo zatvoriti sve ostale aplikacije prije nastavka.$\r$\n$\r$\nKlikni Dalje za nastavak."
-!define MUI_FINISHPAGE_RUN "$INSTDIR\Pokreni SR Manager.bat"
+!define MUI_FINISHPAGE_RUN "wscript.exe"
+!define MUI_FINISHPAGE_RUN_PARAMETERS '"$INSTDIR\SR Manager.vbs"'
 !define MUI_FINISHPAGE_RUN_TEXT "Pokreni SR Manager"
 !define MUI_FINISHPAGE_LINK "Discord: Slavonska Ravnica"
 !define MUI_FINISHPAGE_LINK_LOCATION "${WEBSITE}"
@@ -104,14 +105,14 @@ Section "Instaliraj" SecInstall
     ; Kreiraj uninstaller
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
-    ; Desktop shortcut
-    CreateShortcut "$DESKTOP\SR Manager.lnk" "$INSTDIR\Pokreni SR Manager.bat" "" \
-        "$INSTDIR\sr_logo.ico" 0 SW_SHOWMINIMIZED "" "Slavonska Ravnica - SR Manager"
+    ; Desktop shortcut (koristi .vbs da sakrije CMD prozor)
+    CreateShortcut "$DESKTOP\SR Manager.lnk" "wscript.exe" '"$INSTDIR\SR Manager.vbs"' \
+        "$INSTDIR\sr_logo.ico" 0 SW_SHOWNORMAL "" "Slavonska Ravnica - SR Manager"
 
     ; Start Menu
     CreateDirectory "$SMPROGRAMS\SR Manager"
-    CreateShortcut "$SMPROGRAMS\SR Manager\SR Manager.lnk" "$INSTDIR\Pokreni SR Manager.bat" "" \
-        "$INSTDIR\sr_logo.ico" 0 SW_SHOWMINIMIZED "" "Slavonska Ravnica - SR Manager"
+    CreateShortcut "$SMPROGRAMS\SR Manager\SR Manager.lnk" "wscript.exe" '"$INSTDIR\SR Manager.vbs"' \
+        "$INSTDIR\sr_logo.ico" 0 SW_SHOWNORMAL "" "Slavonska Ravnica - SR Manager"
     CreateShortcut "$SMPROGRAMS\SR Manager\Deinstaliraj.lnk" "$INSTDIR\Uninstall.exe" "" \
         "" 0 SW_SHOWNORMAL "" "Deinstaliraj SR Manager"
 
