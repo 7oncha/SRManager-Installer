@@ -86,6 +86,11 @@ $script:LicenseBranch    = "main"
 $script:LicenseCachePath = Join-Path $env:APPDATA "SR-Launcher\license.dat"
 $script:UserSettingsPath = Join-Path $env:APPDATA "SR-Launcher\user-settings.json"
 $script:LicenseGraceHours = 24
+# Master kljucevi — SHA-256 hashevi (bypass API provjere za vlasnike)
+$script:MasterKeys = @{
+    'edc839803a721440ed539464677dc5b2c2aa6e617dcd36ca7d9d710c8eb0c3f3' = '955519719308427294'
+    '1af71bea85195958d74ff82b4462a42533556e121b653160800a580ab698ddc2' = '470617050482737165'
+}
 $script:IsFullscreen = $false
 $script:WindowRestore = $null
 
@@ -393,6 +398,16 @@ function Get-LocalModHash {
 function Test-License {
     param([string]$key, [string]$hwid, [object]$remote = $null)
     if (-not $key) { return @{ ok=$false; reason='Nema kljuca.' } }
+    # Master key bypass — lokalna provjera bez API poziva
+    $keyHash = Get-SHA256 $key
+    if ($script:MasterKeys.ContainsKey($keyHash)) {
+        $discId = $script:MasterKeys[$keyHash]
+        return @{
+            ok = $true
+            entry = @{ expiresAt = $null; discordId = $discId; permanent = $true }
+            needsBind = $false
+        }
+    }
     # Try to fetch player name from gameSettings.xml; fall back to env user.
     $playerName = $env:USERNAME
     try {
