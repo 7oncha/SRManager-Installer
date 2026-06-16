@@ -9545,4 +9545,7 @@ try {
 # Prikaži glavni prozor prije zatvaranja splasha (inače OnLastWindowClose može ugasiti app).
 $window.Show()
 Close-StartupSplash
-$window.ShowDialog() | Out-Null
+# DispatcherFrame umjesto ShowDialog — ShowDialog baca gresku na vec prikazanom prozoru
+$script:_mainFrame = [System.Windows.Threading.DispatcherFrame]::new()
+$window.Add_Closed({ $script:_mainFrame.Continue = $false })
+[System.Windows.Threading.Dispatcher]::PushFrame($script:_mainFrame)
