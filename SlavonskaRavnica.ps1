@@ -1524,20 +1524,43 @@ function Convert-Rgb565ToArgb {
 
 function Save-RgbaBitmapAsPng {
     param([byte[]]$Rgba, [int]$Width, [int]$Height, [string]$OutPath)
-    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
-    $bmp = New-Object System.Drawing.Bitmap $Width, $Height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $bd = $bmp.LockBits([System.Drawing.Rectangle]::FromLTRB(0, 0, $Width, $Height),
-        [System.Drawing.Imaging.ImageLockMode]::WriteOnly,
-        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    try {
-        [System.Runtime.InteropServices.Marshal]::Copy($Rgba, 0, $bd.Scan0, $Rgba.Length)
-    } finally {
-        $bmp.UnlockBits($bd)
-    }
     $dir = Split-Path $OutPath -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
-    $bmp.Dispose()
+    # Koristimo WPF WriteableBitmap umjesto System.Drawing (pouzdanije na Windows)
+    try {
+        # RGBA → BGRA konverzija (WPF ocekuje Bgra32)
+        $bgra = New-Object byte[] $Rgba.Length
+        for ($i = 0; $i -lt $Rgba.Length; $i += 4) {
+            $bgra[$i]     = $Rgba[$i + 2]  # B
+            $bgra[$i + 1] = $Rgba[$i + 1]  # G
+            $bgra[$i + 2] = $Rgba[$i]      # R
+            $bgra[$i + 3] = $Rgba[$i + 3]  # A
+        }
+        $wb = New-Object System.Windows.Media.Imaging.WriteableBitmap(
+            $Width, $Height, 96, 96,
+            [System.Windows.Media.PixelFormats]::Bgra32, $null)
+        $wb.WritePixels(
+            (New-Object System.Windows.Int32Rect(0, 0, $Width, $Height)),
+            $bgra, ($Width * 4), 0)
+        $encoder = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+        $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($wb))
+        $fs = [System.IO.File]::Create($OutPath)
+        try { $encoder.Save($fs) } finally { $fs.Dispose() }
+        return
+    } catch {}
+    # Fallback: System.Drawing (starije verzije)
+    try {
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+        $bmp = New-Object System.Drawing.Bitmap $Width, $Height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $bd = $bmp.LockBits([System.Drawing.Rectangle]::FromLTRB(0, 0, $Width, $Height),
+            [System.Drawing.Imaging.ImageLockMode]::WriteOnly,
+            [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        try {
+            [System.Runtime.InteropServices.Marshal]::Copy($Rgba, 0, $bd.Scan0, $Rgba.Length)
+        } finally { $bmp.UnlockBits($bd) }
+        $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bmp.Dispose()
+    } catch {}
 }
 
 function Export-ModIconEntryToPng {
@@ -1728,25 +1751,31 @@ function Get-FS25UserDataPath {
 function Get-SavegameSlotInfo {
     param([string]$SlotDir, [int]$SlotNumber)
     $info = [PSCustomObject]@{
-        Slot       = $SlotNumber
-        Folder     = $SlotDir
-        Name       = "savegame$SlotNumber"
-        MapTitle   = ""
-        Money      = ""
-        PlayTime   = ""
-        LastWrite  = ""
-        HasCareer  = $false
-        SizeMb     = 0.0
+        Slot          = $SlotNumber
+        SlotLabel     = "SLOT $SlotNumber"
+        Folder        = $SlotDir
+        Name          = "savegame$SlotNumber"
+        MapTitle      = ""
+        Money         = ""
+        MoneyLabel    = ""
+        PlayTime      = ""
+        PlayTimeLabel = ""
+        LastWrite     = ""
+        StatusLabel   = ""
+        HasCareer     = $false
+        SizeMb        = 0.0
+        IsEmpty       = $true
     }
     try {
         $dirItem = Get-Item $SlotDir -ErrorAction SilentlyContinue
-        if ($dirItem) { $info.LastWrite = $dirItem.LastWriteTime.ToString("dd.MM.yyyy HH:mm") }
+        if ($dirItem) { $info.LastWrite = $dirItem.LastWriteTime.ToString("yyyy-MM-dd") }
         $total = (Get-ChildItem $SlotDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
         if ($total) { $info.SizeMb = [Math]::Round($total / 1MB, 1) }
     } catch {}
     $careerPath = Join-Path $SlotDir "careerSavegame.xml"
     if (Test-Path $careerPath) {
         $info.HasCareer = $true
+        $info.IsEmpty = $false
         try {
             $xml = Get-Content $careerPath -Raw -Encoding UTF8 -ErrorAction Stop
             if ($xml -match '<savegameName>([^<]*)</savegameName>') { $info.Name = $Matches[1].Trim() }
@@ -1757,10 +1786,27 @@ function Get-SavegameSlotInfo {
             if ($xml -match '<playTime>([^<]*)</playTime>') { $info.PlayTime = $Matches[1].Trim() }
         } catch {}
     }
-    if (-not $info.MapTitle) {
+    if (-not $info.MapTitle -and -not $info.IsEmpty) {
         foreach ($thumb in @('mapPreview.png', 'overview.png')) {
             if (Test-Path (Join-Path $SlotDir $thumb)) { $info.MapTitle = "(mapa)"; break }
         }
+    }
+    if ($info.IsEmpty) {
+        $info.Name = "Empty"
+        $info.StatusLabel = ""
+    } else {
+        $info.StatusLabel = "$($info.SizeMb) MB"
+    }
+    # Formatirani labeli za prikaz u kartici
+    if ($info.Money) {
+        try { $info.MoneyLabel = '$' + ([decimal]$info.Money).ToString('N0') } catch { $info.MoneyLabel = '$' + $info.Money }
+    }
+    if ($info.PlayTime) {
+        try {
+            $mins = [int]$info.PlayTime
+            $hrs = [Math]::Floor($mins / 60)
+            $info.PlayTimeLabel = "${hrs}h"
+        } catch { $info.PlayTimeLabel = $info.PlayTime }
     }
     return $info
 }
@@ -1773,6 +1819,14 @@ function Get-FS25SavegameList {
         $slotDir = Join-Path $root "savegame$_"
         if (Test-Path $slotDir) {
             [void]$list.Add((Get-SavegameSlotInfo -SlotDir $slotDir -SlotNumber $_))
+        } else {
+            # Prazan slot — prikazuje se sivo
+            [void]$list.Add([PSCustomObject]@{
+                Slot = $_; SlotLabel = "SLOT $_"; Folder = $slotDir
+                Name = "Empty"; MapTitle = ""; Money = ""; MoneyLabel = ""
+                PlayTime = ""; PlayTimeLabel = ""; LastWrite = ""; StatusLabel = ""
+                HasCareer = $false; SizeMb = 0.0; IsEmpty = $true
+            })
         }
     }
     return @($list.ToArray())
@@ -1977,19 +2031,24 @@ function Refresh-IgraPage {
     if (-not $txtIgraSavePath -or -not $lstSavegames) { return }
     $root = Get-FS25UserDataPath
     if ($root) {
-        $txtIgraSavePath.Text = $root
-        $txtIgraSavePath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#aaa")
+        $txtIgraSavePath.Text = "Odaberi save koji si vec kreirao u FS25."
+        $txtIgraSavePath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#888")
     } else {
-        $txtIgraSavePath.Text = 'FS25 user data nije pronaden (My Games\FarmingSimulator2025)'
+        $txtIgraSavePath.Text = 'FS25 user data nije pronaden. Pokreni FS25 i kreiraj barem jedan save.'
         $txtIgraSavePath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E5484D")
     }
     $lstSavegames.ItemsSource = $null
     $saves = Get-FS25SavegameList
     if ($saves.Count -gt 0) {
+        $filled = @($saves | Where-Object { -not $_.IsEmpty }).Count
         $lstSavegames.ItemsSource = $saves
-        $txtIgraSaveHint.Text = ('{0} slotova - samo pregled (Phase 1). Uredi save tek nakon backupa (kasnije).' -f $saves.Count)
+        if ($filled -gt 0) {
+            $txtIgraSaveHint.Text = "$filled save(s) pronadeno. Klikni na slot za nastavak."
+        } else {
+            $txtIgraSaveHint.Text = "Nema savegame foldera. Pokreni FS25, kreiraj save, pa se vrati ovdje."
+        }
     } else {
-        $txtIgraSaveHint.Text = "Nema savegame foldera. Spremi igru u FS25 pa osvjezi."
+        $txtIgraSaveHint.Text = "Nema savegame foldera. Pokreni FS25, kreiraj save, pa se vrati ovdje."
     }
 }
 
@@ -3243,7 +3302,7 @@ function Show-SplashScreen {
     $splash.WindowStyle = "None"
     $splash.AllowsTransparency = $true
     $splash.Background = [System.Windows.Media.Brushes]::Transparent
-    $splash.Width = 420; $splash.Height = 260
+    $splash.Width = 440; $splash.Height = 280
     $splash.WindowStartupLocation = "CenterScreen"
     $splash.ResizeMode = "NoResize"
     $splash.Topmost = $true
@@ -3255,6 +3314,13 @@ function Show-SplashScreen {
     $border.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
     $border.BorderThickness = "1"
     $border.Padding = "30,24"
+    # Glow efekt oko splash prozora
+    $splashGlow = New-Object System.Windows.Media.Effects.DropShadowEffect
+    $splashGlow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#F5C518")
+    $splashGlow.BlurRadius = 20
+    $splashGlow.ShadowDepth = 0
+    $splashGlow.Opacity = 0.3
+    $border.Effect = $splashGlow
 
     $sp = New-Object System.Windows.Controls.StackPanel
     $sp.VerticalAlignment = "Center"
@@ -3307,13 +3373,20 @@ function Show-SplashScreen {
 
     # Progress bar
     $progressBorder = New-Object System.Windows.Controls.Border
-    $progressBorder.Height = 4; $progressBorder.CornerRadius = "2"
-    $progressBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#222")
+    $progressBorder.Height = 6; $progressBorder.CornerRadius = "3"
+    $progressBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1a1a1a")
     $progressBorder.HorizontalAlignment = "Stretch"
     $progressGrid = New-Object System.Windows.Controls.Grid
     $progressFill = New-Object System.Windows.Controls.Border
-    $progressFill.Height = 4; $progressFill.CornerRadius = "2"
+    $progressFill.Height = 6; $progressFill.CornerRadius = "3"
     $progressFill.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
+    # Glow na progress baru
+    $progressGlow = New-Object System.Windows.Media.Effects.DropShadowEffect
+    $progressGlow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#F5C518")
+    $progressGlow.BlurRadius = 8
+    $progressGlow.ShadowDepth = 0
+    $progressGlow.Opacity = 0.5
+    $progressFill.Effect = $progressGlow
     $progressFill.HorizontalAlignment = "Left"; $progressFill.Width = 0
     $progressGrid.Children.Add($progressFill) | Out-Null
     $progressBorder.Child = $progressGrid
@@ -4853,7 +4926,7 @@ $script:PreloadedLocalModCount = $null
                                         </LinearGradientBrush>
                                     </Border.BorderBrush>
                                     <StackPanel>
-                                        <TextBlock Text="&#x1F4C2; MOJI MODOVI" FontSize="10" Foreground="#888"
+                                        <TextBlock Text="MOJI MODOVI" FontSize="10" Foreground="#888"
                                                    FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,8"/>
                                         <TextBlock x:Name="txtMyModCount" Text="-" FontSize="28"
                                                    FontWeight="Bold" Foreground="{StaticResource Gold}"
@@ -4877,7 +4950,7 @@ $script:PreloadedLocalModCount = $null
                                         </LinearGradientBrush>
                                     </Border.BorderBrush>
                                     <StackPanel>
-                                        <TextBlock Text="&#x2601; SERVER" FontSize="10" Foreground="#888"
+                                        <TextBlock Text="SERVER" FontSize="10" Foreground="#888"
                                                    FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,8"/>
                                         <TextBlock x:Name="txtServerModCount" Text="-" FontSize="28"
                                                    FontWeight="Bold" Foreground="#70b8ff"
@@ -4901,7 +4974,7 @@ $script:PreloadedLocalModCount = $null
                                         </LinearGradientBrush>
                                     </Border.BorderBrush>
                                     <StackPanel>
-                                        <TextBlock Text="&#x26A0; FALI TI" FontSize="10" Foreground="#888"
+                                        <TextBlock Text="FALI TI" FontSize="10" Foreground="#888"
                                                    FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,8"/>
                                         <TextBlock x:Name="txtMissingCount" Text="-" FontSize="28"
                                                    FontWeight="Bold" Foreground="{StaticResource DangerRed}"
@@ -5046,7 +5119,7 @@ $script:PreloadedLocalModCount = $null
                                     </LinearGradientBrush>
                                 </Border.BorderBrush>
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="&#x1F4C2; LOKALNO" FontSize="10" Foreground="#888"
+                                    <TextBlock Text="LOKALNO" FontSize="10" Foreground="#888"
                                                FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
                                     <TextBlock x:Name="txtModsLocal" Text="-" FontSize="26"
                                                FontWeight="Bold" Foreground="{StaticResource Gold}" FontFamily="Segoe UI"/>
@@ -5067,7 +5140,7 @@ $script:PreloadedLocalModCount = $null
                                     </LinearGradientBrush>
                                 </Border.BorderBrush>
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="&#x2601; SERVER" FontSize="10" Foreground="#888"
+                                    <TextBlock Text="SERVER" FontSize="10" Foreground="#888"
                                                FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
                                     <TextBlock x:Name="txtModsServer" Text="-" FontSize="26"
                                                FontWeight="Bold" Foreground="#4EA8DE" FontFamily="Segoe UI"/>
@@ -5088,7 +5161,7 @@ $script:PreloadedLocalModCount = $null
                                     </LinearGradientBrush>
                                 </Border.BorderBrush>
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="&#x26A0; FALI" FontSize="10" Foreground="#888"
+                                    <TextBlock Text="FALI" FontSize="10" Foreground="#888"
                                                FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
                                     <TextBlock x:Name="txtModsMissing" Text="-" FontSize="26"
                                                FontWeight="Bold" Foreground="{StaticResource DangerRed}" FontFamily="Segoe UI"/>
@@ -5109,7 +5182,7 @@ $script:PreloadedLocalModCount = $null
                                     </LinearGradientBrush>
                                 </Border.BorderBrush>
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="&#x1F441; VIDLJIVO" FontSize="10" Foreground="#888"
+                                    <TextBlock Text="VIDLJIVO" FontSize="10" Foreground="#888"
                                                FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
                                     <TextBlock x:Name="txtModsVisible" Text="-" FontSize="26"
                                                FontWeight="Bold" Foreground="#9d8df5" FontFamily="Segoe UI"/>
@@ -5479,41 +5552,98 @@ $script:PreloadedLocalModCount = $null
                                     Padding="24,20" Margin="0,0,0,16"
                                     BorderBrush="#222" BorderThickness="1" MinHeight="300">
                                 <Grid>
-                                    <!-- KORAK 1: Odaberi save -->
+                                    <!-- KORAK 1: Odaberi save (kartice kao FS25) -->
                                     <StackPanel x:Name="wizPage1" Visibility="Visible">
-                                        <TextBlock Text="Korak 1: Odaberi FS25 savegame slot"
-                                                   FontSize="15" FontWeight="SemiBold" Foreground="#F5C518"
-                                                   FontFamily="Segoe UI" Margin="0,0,0,6"/>
-                                        <TextBlock x:Name="txtIgraSavePath" Text="-"
-                                                   FontSize="10" Foreground="#888" FontFamily="Segoe UI"
-                                                   TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                        <Border Background="#111" CornerRadius="8" BorderBrush="#1a1a1a"
-                                                BorderThickness="1" MaxHeight="320">
-                                            <ListView x:Name="lstSavegames" Background="Transparent"
-                                                      BorderThickness="0" Foreground="#ddd" FontFamily="Segoe UI"
-                                                      ScrollViewer.HorizontalScrollBarVisibility="Auto">
-                                                <ListView.View>
-                                                    <GridView>
-                                                        <GridViewColumn Header="Slot" Width="44"
-                                                                        DisplayMemberBinding="{Binding Slot}"/>
-                                                        <GridViewColumn Header="Ime" Width="130"
-                                                                        DisplayMemberBinding="{Binding Name}"/>
-                                                        <GridViewColumn Header="Mapa" Width="110"
-                                                                        DisplayMemberBinding="{Binding MapTitle}"/>
-                                                        <GridViewColumn Header="Novac" Width="80"
-                                                                        DisplayMemberBinding="{Binding Money}"/>
-                                                        <GridViewColumn Header="Sati" Width="64"
-                                                                        DisplayMemberBinding="{Binding PlayTime}"/>
-                                                        <GridViewColumn Header="MB" Width="44"
-                                                                        DisplayMemberBinding="{Binding SizeMb}"/>
-                                                        <GridViewColumn Header="Izmjena" Width="110"
-                                                                        DisplayMemberBinding="{Binding LastWrite}"/>
-                                                    </GridView>
-                                                </ListView.View>
-                                            </ListView>
-                                        </Border>
+                                        <TextBlock Text="Odaberi Save Game"
+                                                   FontSize="16" FontWeight="Bold" Foreground="#eee"
+                                                   FontFamily="Segoe UI" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="txtIgraSavePath"
+                                                   Text="Odaberi save koji si vec kreirao u FS25."
+                                                   FontSize="11" Foreground="#888" FontFamily="Segoe UI"
+                                                   TextWrapping="Wrap" Margin="0,0,0,14"/>
+                                        <ListBox x:Name="lstSavegames" Background="Transparent"
+                                                 BorderThickness="0" Foreground="#ddd" FontFamily="Segoe UI"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                 ScrollViewer.CanContentScroll="False"
+                                                 MaxHeight="360">
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="Background" Value="Transparent"/>
+                                                    <Setter Property="Cursor" Value="Hand"/>
+                                                    <Setter Property="Margin" Value="0,0,0,6"/>
+                                                    <Setter Property="Padding" Value="0"/>
+                                                    <Setter Property="Template">
+                                                        <Setter.Value>
+                                                            <ControlTemplate TargetType="ListBoxItem">
+                                                                <Border x:Name="bd" CornerRadius="10" Padding="16,14"
+                                                                        BorderThickness="1" BorderBrush="#222">
+                                                                    <Border.Background>
+                                                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                                            <GradientStop Color="#141414" Offset="0"/>
+                                                                            <GradientStop Color="#111111" Offset="1"/>
+                                                                        </LinearGradientBrush>
+                                                                    </Border.Background>
+                                                                    <ContentPresenter/>
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsSelected" Value="True">
+                                                                        <Setter TargetName="bd" Property="BorderBrush" Value="#F5C518"/>
+                                                                        <Setter TargetName="bd" Property="Effect">
+                                                                            <Setter.Value>
+                                                                                <DropShadowEffect Color="#F5C518" BlurRadius="10" ShadowDepth="0" Opacity="0.25"/>
+                                                                            </Setter.Value>
+                                                                        </Setter>
+                                                                    </Trigger>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter TargetName="bd" Property="BorderBrush" Value="#3a3a3a"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <!-- Slot badge -->
+                                                        <Border Grid.Column="0" Background="#1a1a1a" CornerRadius="6"
+                                                                Padding="8,4" Margin="0,0,14,0" VerticalAlignment="Center"
+                                                                BorderBrush="#333" BorderThickness="1">
+                                                            <TextBlock Text="{Binding SlotLabel}" FontSize="10"
+                                                                       FontWeight="Bold" Foreground="#888" FontFamily="Segoe UI"/>
+                                                        </Border>
+                                                        <!-- Save info -->
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"
+                                                                       Foreground="#eee" FontFamily="Segoe UI"/>
+                                                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                                <TextBlock Text="{Binding MapTitle}" FontSize="11"
+                                                                           Foreground="#888" FontFamily="Segoe UI" Margin="0,0,12,0"/>
+                                                                <TextBlock Text="{Binding PlayTimeLabel}" FontSize="11"
+                                                                           Foreground="#666" FontFamily="Segoe UI" Margin="0,0,12,0"/>
+                                                                <TextBlock Text="{Binding MoneyLabel}" FontSize="11"
+                                                                           Foreground="#30A46C" FontFamily="Segoe UI" Margin="0,0,12,0"/>
+                                                                <TextBlock Text="{Binding LastWrite}" FontSize="11"
+                                                                           Foreground="#555" FontFamily="Segoe UI"/>
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                        <!-- Status -->
+                                                        <TextBlock Grid.Column="2" Text="{Binding StatusLabel}"
+                                                                   FontSize="10" Foreground="#888"
+                                                                   FontFamily="Segoe UI" VerticalAlignment="Center"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
                                         <TextBlock x:Name="txtIgraSaveHint" FontSize="11" Foreground="#666"
-                                                   FontFamily="Segoe UI" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                                   FontFamily="Segoe UI" TextWrapping="Wrap" Margin="0,8,0,0"
+                                                   Text="Nema savegame foldera. Pokreni FS25, kreiraj save, pa se vrati ovdje."/>
                                         <Button x:Name="btnRefreshSavegames" Content="Osvjezi savegame listu"
                                                 Style="{StaticResource BtnGhost}" HorizontalAlignment="Left"
                                                 Margin="0,8,0,0" Padding="14,8"/>
@@ -5637,7 +5767,7 @@ $script:PreloadedLocalModCount = $null
                                     <DropShadowEffect Color="#F5C518" BlurRadius="8" ShadowDepth="0" Opacity="0.15"/>
                                 </Border.Effect>
                                 <StackPanel>
-                                    <TextBlock Text="&#x1F4C1; Brzi odabir foldera" FontSize="15" FontWeight="SemiBold"
+                                    <TextBlock Text="Brzi odabir foldera" FontSize="15" FontWeight="SemiBold"
                                                Foreground="#F5C518" FontFamily="Segoe UI" Margin="0,0,0,10"/>
                                     <ComboBox x:Name="cmbMpFolderSelect"
                                               Style="{StaticResource DarkComboBox}"/>
@@ -5708,7 +5838,7 @@ $script:PreloadedLocalModCount = $null
                                 </Border.BorderBrush>
                                 <StackPanel>
                                     <Grid Margin="0,0,0,10">
-                                        <TextBlock Text="&#x1F3AE; Mod profili (po serveru)" FontSize="15" FontWeight="SemiBold"
+                                        <TextBlock Text="Mod profili (po serveru)" FontSize="15" FontWeight="SemiBold"
                                                    Foreground="#4EA8DE" FontFamily="Segoe UI"/>
                                         <Button x:Name="btnRefreshModProfiles" Content="Osvjezi"
                                                 Style="{StaticResource BtnGhost}" HorizontalAlignment="Right"
@@ -5740,7 +5870,7 @@ $script:PreloadedLocalModCount = $null
                                 </Border.BorderBrush>
                                 <StackPanel>
                                     <Grid Margin="0,0,0,10">
-                                        <TextBlock Text="&#x1F4E6; U ovom folderu" FontSize="15" FontWeight="SemiBold"
+                                        <TextBlock Text="U ovom folderu" FontSize="15" FontWeight="SemiBold"
                                                    Foreground="#F5C518" FontFamily="Segoe UI"/>
                                         <TextBlock x:Name="txtMpInFolderCount" Text="0 modova"
                                                    HorizontalAlignment="Right" FontSize="11"
@@ -10113,9 +10243,24 @@ try { $script:PreloadedServerStatus = Get-ServerStatus } catch {}
 Set-SplashStep "Provjera modova..." 74
 try { $script:PreloadedModList = Get-ServerModList } catch {}
 
-Set-SplashStep "Ucitavam opcije igre..." 86
+Set-SplashStep "Ucitavam opcije igre..." 78
 try { $script:PreloadedGameSettings = Read-GameSettings } catch {}
 Invoke-SplashPump
+
+Set-SplashStep "Skeniram lokalne modove..." 86
+try {
+    $modPath = Get-EffectiveModsPath
+    if ($modPath -and (Test-Path $modPath)) {
+        $script:PreloadedLocalMods = @(Get-ChildItem $modPath -Filter "*.zip" -File -ErrorAction SilentlyContinue)
+        $script:PreloadedLocalModCount = $script:PreloadedLocalMods.Count
+    }
+} catch {}
+Invoke-SplashPump
+
+Set-SplashStep "Ucitavam savegame slotove..." 92
+try { $script:PreloadedSavegames = Get-FS25SavegameList } catch {}
+Invoke-SplashPump
+
 Set-SplashStep "Pokrecem..." 100
 Initialize-WpfApplicationLifecycle
 
