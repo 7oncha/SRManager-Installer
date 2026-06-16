@@ -6,6 +6,11 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
+# Forsiraj TLS 1.2+ za sigurne HTTPS konekcije
+try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13 } catch {
+    try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 } catch {}
+}
+
 $script:InstallDir = Join-Path $env:USERPROFILE "SR Manager"
 $script:BotUrl     = "https://server-bot-production-a3a0.up.railway.app"
 $script:BaseUrl    = "https://raw.githubusercontent.com/7oncha/SRManager-Installer/master"

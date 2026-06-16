@@ -25,6 +25,11 @@ Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Windows.Forms
 
+# Forsiraj TLS 1.2+ za sve HTTPS pozive (sigurnost mrežne komunikacije)
+try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13 } catch {
+    try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 } catch {}
+}
+
 # Globalni exception handleri — sprijecavaju tiho gasenje aplikacije
 try {
     [System.AppDomain]::CurrentDomain.Add_UnhandledException({
@@ -470,6 +475,7 @@ function Start-LicenseSessionWatcher {
     <#
         Spawns a detached background PowerShell that survives launcher shutdown.
         Waits for FS25 process to exit, then POSTs /api/license/session-end with elapsed minutes.
+        Token se prosljedjuje kroz environment varijablu umjesto plaintext temp fajla.
     #>
     param([string]$Key)
     if (-not $Key) { return }
@@ -478,14 +484,14 @@ function Start-LicenseSessionWatcher {
     $hwid = Get-Hwid
     $gameUid = "$($env:COMPUTERNAME)/$($env:USERNAME)"
     $startIso = (Get-Date).ToUniversalTime().ToString('o')
-    # Build child script body
+    # Child script cita token iz env varijable (ne ostaje na disku)
     $body = @"
 `$ErrorActionPreference = 'SilentlyContinue'
 `$key = '$Key'
 `$hwid = '$hwid'
 `$gameUid = '$gameUid'
 `$url = '$($api.url)/api/license/session-end'
-`$token = '$($api.token)'
+`$token = `$env:SR_SESSION_TOKEN
 `$start = [datetime]'$startIso'
 # Wait up to 5 min for game to actually appear
 `$attempts = 0
@@ -502,11 +508,20 @@ while (Get-Process -Name 'FarmingSimulator2025*' -ErrorAction SilentlyContinue) 
 try {
     Invoke-WebRequest -Uri `$url -Method POST -Headers @{ Authorization = "Bearer `$token"; 'Content-Type' = 'application/json' } -Body `$json -UseBasicParsing -TimeoutSec 15 | Out-Null
 } catch {}
+# Obrisi temp skriptu nakon izvrsavanja
+try { Remove-Item -LiteralPath `$MyInvocation.MyCommand.Path -Force } catch {}
 "@
     try {
         $tmp = Join-Path $env:TEMP ("sr-session-" + [guid]::NewGuid().ToString('N') + ".ps1")
         Set-Content -Path $tmp -Value $body -Encoding UTF8
-        Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$tmp) -WindowStyle Hidden | Out-Null
+        # Token proslijedi kao env varijabla - ne ostaje na disku u skripti
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = 'powershell.exe'
+        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$tmp`""
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        $psi.UseShellExecute = $false
+        $psi.EnvironmentVariables['SR_SESSION_TOKEN'] = $api.token
+        [System.Diagnostics.Process]::Start($psi) | Out-Null
         Write-Log "License session watcher started (PID detached)."
     } catch {
         Write-Log "Failed to start license session watcher: $($_.Exception.Message)"
