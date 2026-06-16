@@ -1400,10 +1400,11 @@ function Convert-DdsBytesToPngFile {
 
 function Convert-Rgb565ToArgb {
     param([uint16]$C, [byte]$A = 255)
-    $r = (($C -shr 11) -band 0x1F) * 255 / 31
-    $g = (($C -shr 5) -band 0x3F) * 255 / 63
-    $b = ($C -band 0x1F) * 255 / 31
-    return [uint32]($b -bor ($g -shl 8) -bor ($r -shl 16) -bor ($A -shl 24))
+    $r = [int]((($C -shr 11) -band 0x1F) * 255 / 31)
+    $g = [int]((($C -shr 5) -band 0x3F) * 255 / 63)
+    $b = [int](($C -band 0x1F) * 255 / 31)
+    # [int64] aritmetika sprijecava signed overflow kod alpha shift-a (kompatibilno s PS 5.1 i PS Core)
+    return [uint32]([int64]$b -bor ([int64]$g -shl 8) -bor ([int64]$r -shl 16) -bor ([int64]$A -shl 24))
 }
 
 function Save-RgbaBitmapAsPng {
@@ -1525,22 +1526,34 @@ function Start-ModThumbnailLoads {
             New-Item -ItemType Directory -Path $script:ModThumbsPath -Force | Out-Null
         }
     } catch {}
+    # Semafor ogranicava broj istovremenih ZIP operacija (sprijecava freeze kod 400+ modova)
+    if (-not $script:ThumbSemaphore) {
+        $script:ThumbSemaphore = New-Object System.Threading.SemaphoreSlim(4, 4)
+    }
     foreach ($item in @($Items)) {
         if ($item.HasThumb -or $item.ThumbLoading) { continue }
         if (-not $item.LocalZipPath -or -not (Test-Path $item.LocalZipPath)) { continue }
         $cached = Get-ModThumbnailCachePath -ZipPath $item.LocalZipPath
         if ($cached -and (Test-Path $cached)) {
-            $item.ThumbSource = New-ModBitmapImage $cached
-            $item.HasThumb = ($null -ne $item.ThumbSource)
+            try {
+                $item.ThumbSource = New-ModBitmapImage $cached
+                $item.HasThumb = ($null -ne $item.ThumbSource)
+            } catch {}
             continue
         }
         $item.ThumbLoading = $true
         $zipPath = [string]$item.LocalZipPath
         $itRef = $item
+        $sem = $script:ThumbSemaphore
         $cb = [System.Threading.WaitCallback]{
             param($state)
             $path = $null
-            try { $path = Get-ModThumbnailFromZip -ZipPath $state.Zip } catch {}
+            try {
+                $state.Sem.Wait()
+                try { $path = Get-ModThumbnailFromZip -ZipPath $state.Zip } catch {}
+            } finally {
+                try { $state.Sem.Release() } catch {}
+            }
             $state.Window.Dispatcher.BeginInvoke([Action]{
                 try {
                     if ($path -and (Test-Path $path)) {
@@ -1558,6 +1571,7 @@ function Start-ModThumbnailLoads {
             Zip    = $zipPath
             Item   = $itRef
             Window = $window
+            Sem    = $sem
         })
     }
 }
@@ -3030,7 +3044,8 @@ function Get-ServerModList {
     try {
         $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10
         $html = $response.Content
-        $results = @()
+        $results = New-Object System.Collections.ArrayList
+        $seenNames = @{}
         $regex = [regex]'href="([^"]*?([^/"]+\.zip))"'
         $regexMatches = $regex.Matches($html)
         foreach ($m in $regexMatches) {
@@ -3043,11 +3058,12 @@ function Get-ServerModList {
                     $href = "http://$($server.ip):$($server.webPort)/$href"
                 }
             }
-            if (-not ($results | Where-Object { $_.Name -eq $name })) {
-                $results += [PSCustomObject]@{ Name = $name; Url = $href; Sha256 = ''; Size = 0; Source = 'html' }
+            if (-not $seenNames.ContainsKey($name)) {
+                $seenNames[$name] = $true
+                [void]$results.Add([PSCustomObject]@{ Name = $name; Url = $href; Sha256 = ''; Size = 0; Source = 'html' })
             }
         }
-        return $results
+        return @($results.ToArray())
     } catch {
         return $null
     }
@@ -7497,7 +7513,8 @@ function Refresh-ModList {
     $txtModStatus.Text = "Ucitavam..."
     # Ne mijesati Items i ItemsSource - iskljuci ItemsSource pa ce Apply-ModFilter postaviti opet
     if ($lstMods.ItemsSource) { $lstMods.ItemsSource = $null }
-    $script:AllModItems = @()
+    # ArrayList umjesto array += (O(n) umjesto O(n^2) za 400+ modova)
+    $allItems = New-Object System.Collections.ArrayList
     if (-not $PreloadedServerMods) { $script:ModListCached = $false }
 
     $modsPath = Get-EffectiveModsPath
@@ -7517,13 +7534,23 @@ function Refresh-ModList {
         $txtMissingCount.Text = "?"
         $txtModStatus.Text = "Ne mogu dohvatiti listu sa servera"
         Write-Log "GRESKA: Ne mogu dohvatiti mods.html. Provjeri da je Public Mod Download aktiviran."
+        $loopCount = 0
         foreach ($mod in $localMods) {
             $size = "{0:N1} MB" -f ($mod.Length / 1MB)
             $lm = Resolve-LocalModMeta -LocalFile $mod
-            $script:AllModItems += (New-ModSyncItem -Status 'Lokalno' -DisplayName $mod.BaseName -ZipName $mod.Name `
+            [void]$allItems.Add((New-ModSyncItem -Status 'Lokalno' -DisplayName $mod.BaseName -ZipName $mod.Name `
                 -Local 'Da' -Server '?' -Size $size -StatusDetail 'Server lista nedostupna' `
-                -ModType $lm.ModType -LocalZipPath $lm.LocalZipPath -Version $lm.Version)
+                -ModType $lm.ModType -LocalZipPath $lm.LocalZipPath -Version $lm.Version))
+            # Pumpaj WPF dispatcher svaki 20. mod da UI ne zamrzne
+            $loopCount++
+            if ($loopCount % 20 -eq 0) {
+                try {
+                    $txtModStatus.Text = "Ucitavam lokalne modove... ($loopCount/$myCount)"
+                    [System.Windows.Forms.Application]::DoEvents()
+                } catch {}
+            }
         }
+        $script:AllModItems = @($allItems.ToArray())
         Apply-ModFilter (Get-CurrentFilter)
         return
     }
@@ -7541,6 +7568,8 @@ function Refresh-ModList {
     try { if ($null -ne $script:Config.sizeCheck) { $useSizeCheck = [bool]$script:Config.sizeCheck } } catch {}
     $missing = 0
     $outdated = 0
+    $loopCount = 0
+    $totalToProcess = $serverMods.Count
 
     foreach ($sm in $serverMods) {
         $dlUrl = ''
@@ -7602,22 +7631,30 @@ function Refresh-ModList {
                 $outdated++
                 $missing++
                 $serverLabel = if ($serverSizeText) { "Da ($serverSizeText)" } else { "Da (azurirano)" }
-                $script:AllModItems += (New-ModSyncItem -Status 'ZASTARIO' -DisplayName $displayName -ZipName $zipName `
+                [void]$allItems.Add((New-ModSyncItem -Status 'ZASTARIO' -DisplayName $displayName -ZipName $zipName `
                     -Local 'Da' -Server $serverLabel -Size $size -StatusDetail $statusDetail `
                     -LocalSha $localSha -ServerSha $smSha -Version $verLabel `
-                    -ModType $localMeta.ModType -LocalZipPath $localMeta.LocalZipPath -DownloadUrl $dlUrl)
+                    -ModType $localMeta.ModType -LocalZipPath $localMeta.LocalZipPath -DownloadUrl $dlUrl))
                 Add-RecentModSyncEntry -Name $displayName -Action 'azuriran'
             } else {
-                $script:AllModItems += (New-ModSyncItem -Status 'OK' -DisplayName $displayName -ZipName $zipName `
+                [void]$allItems.Add((New-ModSyncItem -Status 'OK' -DisplayName $displayName -ZipName $zipName `
                     -Local 'Da' -Server 'Da' -Size $size -StatusDetail 'Sinkronizirano (SHA/velicina OK)' -Version $verLabel `
-                    -ModType $localMeta.ModType -LocalZipPath $localMeta.LocalZipPath -DownloadUrl $dlUrl)
+                    -ModType $localMeta.ModType -LocalZipPath $localMeta.LocalZipPath -DownloadUrl $dlUrl))
             }
         } else {
             $missing++
-            $script:AllModItems += (New-ModSyncItem -Status 'FALI' -DisplayName $displayName -ZipName $zipName `
+            [void]$allItems.Add((New-ModSyncItem -Status 'FALI' -DisplayName $displayName -ZipName $zipName `
                 -Local 'Ne' -Server 'Da' -Size '-' -StatusDetail 'Lokalni ZIP nedostaje u mods folderu' -Version $verLabel `
-                -ModType 'Other' -DownloadUrl $dlUrl)
+                -ModType 'Other' -DownloadUrl $dlUrl))
             Add-RecentModSyncEntry -Name $displayName -Action 'fali'
+        }
+        # Pumpaj WPF dispatcher svaki 15. mod da UI ne zamrzne
+        $loopCount++
+        if ($loopCount % 15 -eq 0) {
+            try {
+                $txtModStatus.Text = "Obrada modova... ($loopCount/$totalToProcess)"
+                [System.Windows.Forms.Application]::DoEvents()
+            } catch {}
         }
     }
 
@@ -7629,11 +7666,12 @@ function Refresh-ModList {
         if (($serverModKeys -notcontains $lmKey) -and ($lmCanon -and $serverCanonKeys -notcontains $lmCanon)) {
             $size = "{0:N1} MB" -f ($lm.Length / 1MB)
             $extraMeta = Resolve-LocalModMeta -LocalFile $lm
-            $script:AllModItems += (New-ModSyncItem -Status 'Extra' -DisplayName $lm.BaseName -ZipName $lm.Name `
+            [void]$allItems.Add((New-ModSyncItem -Status 'Extra' -DisplayName $lm.BaseName -ZipName $lm.Name `
                 -Local 'Da' -Server 'Ne' -Size $size -StatusDetail 'Nije na server listi' `
-                -ModType $extraMeta.ModType -LocalZipPath $extraMeta.LocalZipPath -Version $extraMeta.Version)
+                -ModType $extraMeta.ModType -LocalZipPath $extraMeta.LocalZipPath -Version $extraMeta.Version))
         }
     }
+    $script:AllModItems = @($allItems.ToArray())
 
     $txtServerModCount.Text = "$($serverMods.Count)"
     $txtMissingCount.Text = "$missing"

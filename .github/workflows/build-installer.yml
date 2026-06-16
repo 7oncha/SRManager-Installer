@@ -1,0 +1,58 @@
+name: Build NSIS Installer
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+        shell: cmd
+
+      - name: Download SRManager.exe from release
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          if (-not $tag) { $tag = (git describe --tags --abbrev=0 2>$null); if (-not $tag) { $tag = "latest" } }
+          $exeUrl = "https://github.com/${{ github.repository }}/releases/download/$tag/SRManager.exe"
+          Write-Host "Pokusavam skinuti SRManager.exe sa: $exeUrl"
+          try {
+              Invoke-WebRequest -Uri $exeUrl -OutFile "SRManager.exe" -UseBasicParsing -ErrorAction Stop
+              Write-Host "SRManager.exe skinut ($((Get-Item SRManager.exe).Length) bytes)"
+          } catch {
+              Write-Host "WARN: SRManager.exe nije dostupan u release assetima - installer ce raditi bez njega"
+              # Kreiraj prazan placeholder tako da NSIS File komanda ne puca
+              # (installer.nsi koristi IfFileExists za ovu datoteku)
+          }
+
+      - name: Build installer
+        shell: cmd
+        run: |
+          "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
+
+      - name: Upload installer to release
+        if: github.event_name == 'release'
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          $file = "dist\SRManager_Setup.exe"
+          if (-not (Test-Path $file)) { throw "Installer nije generiran!" }
+          $size = [math]::Round((Get-Item $file).Length / 1MB, 2)
+          Write-Host "Upload SRManager_Setup.exe ($size MB) na release $tag..."
+          gh release upload $tag $file --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload as artifact (manual trigger)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SRManager_Setup
+          path: dist/SRManager_Setup.exe
