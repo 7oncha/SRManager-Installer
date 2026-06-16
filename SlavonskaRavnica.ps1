@@ -5235,76 +5235,212 @@ $script:PreloadedLocalModCount = $null
                         </Border>
                     </Grid>
 
-                    <!-- PAGE: IGRA (savegame + mod profili) -->
+                    <!-- PAGE: KONFIGURIRAJ SAVE (inline wizard) -->
                     <ScrollViewer x:Name="pageIgra" Visibility="Collapsed"
                                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                        <StackPanel Margin="24,24,24,24" MaxWidth="900">
+                        <Grid Margin="24,24,24,24" MaxWidth="900">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
 
-                            <StackPanel Margin="0,0,0,18">
-                                    <TextBlock Text="Savegame" Style="{StaticResource PageTitle}"/>
-                                <TextBlock Text="Pregled FS25 save slotova (bez izmjene save datoteka). Mod profili su u Multiplayer folderi."
-                                           FontSize="12" Foreground="#666" FontFamily="Segoe UI" Margin="0,4,0,0"
-                                           TextWrapping="Wrap"/>
+                            <!-- Naslov -->
+                            <StackPanel Grid.Row="0" Margin="0,0,0,18">
+                                <TextBlock Text="Konfiguriraj save" Style="{StaticResource PageTitle}"/>
+                                <TextBlock x:Name="txtWizardSubtitle"
+                                           Text="Postavi FS25 savegame, mod folder, postavke i profil u par koraka"
+                                           FontSize="12" Foreground="#666" FontFamily="Segoe UI"
+                                           Margin="0,4,0,0" TextWrapping="Wrap"/>
                             </StackPanel>
 
-                            <Border Background="#161616" CornerRadius="10" Padding="20"
-                                    Margin="0,0,0,14" BorderBrush="#222" BorderThickness="1">
-                                <StackPanel>
-                                    <Grid Margin="0,0,0,8">
-                                        <TextBlock Text="Savegame slotovi (FS25)" FontSize="15"
-                                                   FontWeight="SemiBold" Foreground="#F5C518" FontFamily="Segoe UI"/>
-                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                            <Button x:Name="btnSaveWizard" Content="Čarobnjak savea"
-                                                    Style="{StaticResource BtnPrimary}" Margin="0,0,8,0"
-                                                    Padding="16,8" ToolTip="7 koraka: save, mod folder, profil, backup, primjena"/>
-                                            <Button x:Name="btnRefreshSavegames" Content="Osvjezi savegame"
-                                                    Style="{StaticResource BtnGhost}" Padding="16,8"/>
-                                        </StackPanel>
-                                    </Grid>
-                                    <TextBlock x:Name="txtIgraSavePath" Text="-"
-                                               FontSize="10" Foreground="#888" FontFamily="Segoe UI"
-                                               TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                    <Border Background="#111" CornerRadius="8" BorderBrush="#1a1a1a"
-                                            BorderThickness="1" MaxHeight="320">
-                                        <ListView x:Name="lstSavegames" Background="Transparent"
-                                                  BorderThickness="0" Foreground="#ddd" FontFamily="Segoe UI"
-                                                  ScrollViewer.HorizontalScrollBarVisibility="Auto">
-                                            <ListView.View>
-                                                <GridView>
-                                                    <GridViewColumn Header="Slot" Width="44"
-                                                                    DisplayMemberBinding="{Binding Slot}"/>
-                                                    <GridViewColumn Header="Ime" Width="130"
-                                                                    DisplayMemberBinding="{Binding Name}"/>
-                                                    <GridViewColumn Header="Mapa" Width="110"
-                                                                    DisplayMemberBinding="{Binding MapTitle}"/>
-                                                    <GridViewColumn Header="Novac" Width="80"
-                                                                    DisplayMemberBinding="{Binding Money}"/>
-                                                    <GridViewColumn Header="Sati" Width="64"
-                                                                    DisplayMemberBinding="{Binding PlayTime}"/>
-                                                    <GridViewColumn Header="MB" Width="44"
-                                                                    DisplayMemberBinding="{Binding SizeMb}"/>
-                                                    <GridViewColumn Header="Izmjena" Width="110"
-                                                                    DisplayMemberBinding="{Binding LastWrite}"/>
-                                                </GridView>
-                                            </ListView.View>
-                                        </ListView>
-                                    </Border>
-                                </StackPanel>
+                            <!-- Step indikator -->
+                            <Border Grid.Row="1" Background="#121212" CornerRadius="10"
+                                    Padding="16,14" Margin="0,0,0,16"
+                                    BorderBrush="#1f1f1f" BorderThickness="1">
+                                <UniformGrid Columns="5">
+                                    <StackPanel x:Name="wizStep1Indicator" HorizontalAlignment="Center">
+                                        <Border Width="32" Height="32" CornerRadius="16" HorizontalAlignment="Center"
+                                                Background="#F5C518" Margin="0,0,0,6">
+                                            <TextBlock Text="1" FontSize="14" FontWeight="Bold"
+                                                       Foreground="#111" FontFamily="Segoe UI"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <TextBlock Text="Odaberi save" FontSize="9" Foreground="#aaa"
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                    <StackPanel x:Name="wizStep2Indicator" HorizontalAlignment="Center">
+                                        <Border Width="32" Height="32" CornerRadius="16" HorizontalAlignment="Center"
+                                                Background="#333" Margin="0,0,0,6">
+                                            <TextBlock Text="2" FontSize="14" FontWeight="Bold"
+                                                       Foreground="#888" FontFamily="Segoe UI"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <TextBlock Text="Mod folder" FontSize="9" Foreground="#666"
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                    <StackPanel x:Name="wizStep3Indicator" HorizontalAlignment="Center">
+                                        <Border Width="32" Height="32" CornerRadius="16" HorizontalAlignment="Center"
+                                                Background="#333" Margin="0,0,0,6">
+                                            <TextBlock Text="3" FontSize="14" FontWeight="Bold"
+                                                       Foreground="#888" FontFamily="Segoe UI"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <TextBlock Text="Postavke" FontSize="9" Foreground="#666"
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                    <StackPanel x:Name="wizStep4Indicator" HorizontalAlignment="Center">
+                                        <Border Width="32" Height="32" CornerRadius="16" HorizontalAlignment="Center"
+                                                Background="#333" Margin="0,0,0,6">
+                                            <TextBlock Text="4" FontSize="14" FontWeight="Bold"
+                                                       Foreground="#888" FontFamily="Segoe UI"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <TextBlock Text="Mod profil" FontSize="9" Foreground="#666"
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                    <StackPanel x:Name="wizStep5Indicator" HorizontalAlignment="Center">
+                                        <Border Width="32" Height="32" CornerRadius="16" HorizontalAlignment="Center"
+                                                Background="#333" Margin="0,0,0,6">
+                                            <TextBlock Text="5" FontSize="14" FontWeight="Bold"
+                                                       Foreground="#888" FontFamily="Segoe UI"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <TextBlock Text="Potvrdi" FontSize="9" Foreground="#666"
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </UniformGrid>
                             </Border>
 
-                            <Grid Margin="0,4,0,0">
+                            <!-- Sadrzaj koraka -->
+                            <Border Grid.Row="2" Background="#161616" CornerRadius="10"
+                                    Padding="24,20" Margin="0,0,0,16"
+                                    BorderBrush="#222" BorderThickness="1" MinHeight="300">
+                                <Grid>
+                                    <!-- KORAK 1: Odaberi save -->
+                                    <StackPanel x:Name="wizPage1" Visibility="Visible">
+                                        <TextBlock Text="Korak 1: Odaberi FS25 savegame slot"
+                                                   FontSize="15" FontWeight="SemiBold" Foreground="#F5C518"
+                                                   FontFamily="Segoe UI" Margin="0,0,0,6"/>
+                                        <TextBlock x:Name="txtIgraSavePath" Text="-"
+                                                   FontSize="10" Foreground="#888" FontFamily="Segoe UI"
+                                                   TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                        <Border Background="#111" CornerRadius="8" BorderBrush="#1a1a1a"
+                                                BorderThickness="1" MaxHeight="320">
+                                            <ListView x:Name="lstSavegames" Background="Transparent"
+                                                      BorderThickness="0" Foreground="#ddd" FontFamily="Segoe UI"
+                                                      ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                                <ListView.View>
+                                                    <GridView>
+                                                        <GridViewColumn Header="Slot" Width="44"
+                                                                        DisplayMemberBinding="{Binding Slot}"/>
+                                                        <GridViewColumn Header="Ime" Width="130"
+                                                                        DisplayMemberBinding="{Binding Name}"/>
+                                                        <GridViewColumn Header="Mapa" Width="110"
+                                                                        DisplayMemberBinding="{Binding MapTitle}"/>
+                                                        <GridViewColumn Header="Novac" Width="80"
+                                                                        DisplayMemberBinding="{Binding Money}"/>
+                                                        <GridViewColumn Header="Sati" Width="64"
+                                                                        DisplayMemberBinding="{Binding PlayTime}"/>
+                                                        <GridViewColumn Header="MB" Width="44"
+                                                                        DisplayMemberBinding="{Binding SizeMb}"/>
+                                                        <GridViewColumn Header="Izmjena" Width="110"
+                                                                        DisplayMemberBinding="{Binding LastWrite}"/>
+                                                    </GridView>
+                                                </ListView.View>
+                                            </ListView>
+                                        </Border>
+                                        <TextBlock x:Name="txtIgraSaveHint" FontSize="11" Foreground="#666"
+                                                   FontFamily="Segoe UI" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                        <Button x:Name="btnRefreshSavegames" Content="Osvjezi savegame listu"
+                                                Style="{StaticResource BtnGhost}" HorizontalAlignment="Left"
+                                                Margin="0,8,0,0" Padding="14,8"/>
+                                    </StackPanel>
+
+                                    <!-- KORAK 2: Mod folder -->
+                                    <StackPanel x:Name="wizPage2" Visibility="Collapsed">
+                                        <TextBlock Text="Korak 2: Mod folder za ovaj save"
+                                                   FontSize="15" FontWeight="SemiBold" Foreground="#F5C518"
+                                                   FontFamily="Segoe UI" Margin="0,0,0,6"/>
+                                        <TextBlock Text="Ovaj folder ce se koristiti kao mod direktorij za odabrani save (gameSettings.xml → modsDirectoryOverride)."
+                                                   FontSize="11" Foreground="#888" FontFamily="Segoe UI"
+                                                   TextWrapping="Wrap" Margin="0,0,0,14"/>
+                                        <TextBox x:Name="txtWizModsPath" Background="#1a1a1a" Foreground="#eee"
+                                                 FontFamily="Segoe UI" FontSize="12" Padding="10,10"
+                                                 BorderBrush="#333" BorderThickness="1"/>
+                                        <Button x:Name="btnWizBrowseMods" Content="Odaberi folder..."
+                                                Style="{StaticResource BtnGhost}" HorizontalAlignment="Left"
+                                                Margin="0,10,0,0" Padding="14,8"/>
+                                    </StackPanel>
+
+                                    <!-- KORAK 3: Postavke -->
+                                    <StackPanel x:Name="wizPage3" Visibility="Collapsed">
+                                        <TextBlock Text="Korak 3: Postavke savea"
+                                                   FontSize="15" FontWeight="SemiBold" Foreground="#F5C518"
+                                                   FontFamily="Segoe UI" Margin="0,0,0,6"/>
+                                        <TextBlock x:Name="txtWizSaveInfo" Text=""
+                                                   FontSize="12" Foreground="#aaa" FontFamily="Segoe UI"
+                                                   TextWrapping="Wrap" Margin="0,0,0,14"/>
+                                        <CheckBox x:Name="chkWizSkipIntro"
+                                                  Content="Preskoci Giants intro (-skipStartVideos)"
+                                                  Foreground="#aaa" FontFamily="Segoe UI" Margin="0,0,0,10"/>
+                                        <CheckBox x:Name="chkWizBackup"
+                                                  Content="Napravi backup savegame foldera prije primjene (preporuceno)"
+                                                  Foreground="#aaa" FontFamily="Segoe UI" IsChecked="True"/>
+                                    </StackPanel>
+
+                                    <!-- KORAK 4: Mod profil -->
+                                    <StackPanel x:Name="wizPage4" Visibility="Collapsed">
+                                        <TextBlock Text="Korak 4: Mod profil (loadout)"
+                                                   FontSize="15" FontWeight="SemiBold" Foreground="#F5C518"
+                                                   FontFamily="Segoe UI" Margin="0,0,0,6"/>
+                                        <TextBlock Text="Povezi mod profil s ovim saveom. Profil definira koji su modovi aktivni."
+                                                   FontSize="11" Foreground="#888" FontFamily="Segoe UI"
+                                                   TextWrapping="Wrap" Margin="0,0,0,14"/>
+                                        <Border Background="#111" CornerRadius="8" BorderBrush="#1a1a1a"
+                                                BorderThickness="1" MaxHeight="240">
+                                            <ListBox x:Name="lstWizProfiles" Background="Transparent"
+                                                     Foreground="#ddd" FontFamily="Segoe UI" FontSize="12"
+                                                     BorderThickness="0" DisplayMemberPath="Label"/>
+                                        </Border>
+                                    </StackPanel>
+
+                                    <!-- KORAK 5: Potvrda -->
+                                    <StackPanel x:Name="wizPage5" Visibility="Collapsed">
+                                        <TextBlock Text="Korak 5: Potvrda — ovo ce se primijeniti"
+                                                   FontSize="15" FontWeight="SemiBold" Foreground="#F5C518"
+                                                   FontFamily="Segoe UI" Margin="0,0,0,10"/>
+                                        <Border Background="#111" CornerRadius="8" Padding="16,14"
+                                                BorderBrush="#1a1a1a" BorderThickness="1">
+                                            <TextBlock x:Name="txtWizSummary" Text="" FontSize="12"
+                                                       Foreground="#bbb" FontFamily="Segoe UI" TextWrapping="Wrap"/>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <!-- Navigacijski gumbi -->
+                            <Grid Grid.Row="3">
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock x:Name="txtIgraSaveHint" Grid.Column="0" VerticalAlignment="Center"
-                                           FontSize="11" Foreground="#666" FontFamily="Segoe UI" TextWrapping="Wrap"
-                                           Margin="0,0,12,0"/>
-                                <Button x:Name="btnOpenSaveSlot" Grid.Column="1" Content="Otvori slot u Exploreru"
-                                        Style="{StaticResource BtnPrimary}" Padding="20,10"
-                                        ToolTip="Otvara odabrani savegame folder (bez izmjene datoteka)"/>
+                                <Button x:Name="btnOpenSaveSlot" Grid.Column="0"
+                                        Content="Otvori slot u Exploreru"
+                                        Style="{StaticResource BtnGhost}" Padding="16,10"
+                                        ToolTip="Otvara odabrani savegame folder"/>
+                                <Button x:Name="btnWizBack" Grid.Column="2" Content="Natrag"
+                                        Style="{StaticResource BtnGhost}" Padding="18,10" Margin="0,0,8,0"
+                                        Visibility="Collapsed"/>
+                                <Button x:Name="btnWizNext" Grid.Column="3" Content="Dalje"
+                                        Style="{StaticResource BtnPrimary}" Padding="24,10" FontWeight="Bold"/>
+                                <!-- Skriveni za kompatibilnost -->
+                                <Button x:Name="btnSaveWizard" Visibility="Collapsed"/>
                             </Grid>
-                        </StackPanel>
+                        </Grid>
                     </ScrollViewer>
 
                     <!-- PAGE: MULTIPLAYER FOLDERS -->
@@ -6213,6 +6349,26 @@ $txtIgraSaveHint     = $window.FindName("txtIgraSaveHint")
 $btnRefreshSavegames = $window.FindName("btnRefreshSavegames")
 $btnOpenSaveSlot     = $window.FindName("btnOpenSaveSlot")
 $btnSaveWizard       = $window.FindName("btnSaveWizard")
+$wizStep1Indicator   = $window.FindName("wizStep1Indicator")
+$wizStep2Indicator   = $window.FindName("wizStep2Indicator")
+$wizStep3Indicator   = $window.FindName("wizStep3Indicator")
+$wizStep4Indicator   = $window.FindName("wizStep4Indicator")
+$wizStep5Indicator   = $window.FindName("wizStep5Indicator")
+$wizPage1            = $window.FindName("wizPage1")
+$wizPage2            = $window.FindName("wizPage2")
+$wizPage3            = $window.FindName("wizPage3")
+$wizPage4            = $window.FindName("wizPage4")
+$wizPage5            = $window.FindName("wizPage5")
+$txtWizModsPath      = $window.FindName("txtWizModsPath")
+$btnWizBrowseMods    = $window.FindName("btnWizBrowseMods")
+$txtWizSaveInfo      = $window.FindName("txtWizSaveInfo")
+$chkWizSkipIntro     = $window.FindName("chkWizSkipIntro")
+$chkWizBackup        = $window.FindName("chkWizBackup")
+$lstWizProfiles      = $window.FindName("lstWizProfiles")
+$txtWizSummary       = $window.FindName("txtWizSummary")
+$btnWizBack          = $window.FindName("btnWizBack")
+$btnWizNext          = $window.FindName("btnWizNext")
+$txtWizardSubtitle   = $window.FindName("txtWizardSubtitle")
 $filterAll           = $window.FindName("filterAll")
 $filterServer        = $window.FindName("filterServer")
 $filterMissing       = $window.FindName("filterMissing")
@@ -6375,6 +6531,7 @@ $navMods.Add_Checked({
 $navIgra.Add_Checked({
     Set-Page 'igra'
     Refresh-IgraPage
+    Set-WizardStep 1
 })
 $navMpFolders.Add_Checked({
     Set-Page 'mpfolders'
@@ -6715,7 +6872,222 @@ if ($chkHideWalkthrough) {
 }
 
 # ============================================================
-# SAVE WIZARD (Konfiguriraj save — 7 koraka, hrvatski)
+# INLINE SAVE WIZARD (5 koraka u tabu "Konfiguriraj save")
+# ============================================================
+$script:WizardState = @{
+    Step            = 1
+    SelectedSave    = $null
+    ModsPath        = if ($script:Config.modsPath) { [string]$script:Config.modsPath } else { '' }
+    ProfileId       = ''
+    ProfileLabel    = '(zadani SR profil)'
+    SkipGiantsIntro = $false
+    DoBackup        = $true
+}
+
+function Set-WizardStep {
+    param([int]$Step)
+    $script:WizardState.Step = $Step
+    $gold = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F5C518')
+    $done = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#30A46C')
+    $gray = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#333')
+    $darkFg = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#111')
+    $lightFg = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#888')
+    $activeLbl = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#aaa')
+    $inactiveLbl = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#666')
+    for ($i = 1; $i -le 5; $i++) {
+        $ind = (Get-Variable "wizStep${i}Indicator" -ValueOnly)
+        if (-not $ind) { continue }
+        $circle = $ind.Children[0]
+        $label = $ind.Children[1]
+        if ($i -lt $Step) {
+            $circle.Background = $done
+            $circle.Child.Foreground = $darkFg
+            $label.Foreground = $activeLbl
+        } elseif ($i -eq $Step) {
+            $circle.Background = $gold
+            $circle.Child.Foreground = $darkFg
+            $label.Foreground = $activeLbl
+        } else {
+            $circle.Background = $gray
+            $circle.Child.Foreground = $lightFg
+            $label.Foreground = $inactiveLbl
+        }
+    }
+    # Prikazi samo aktivnu stranicu
+    $wizPage1.Visibility = if ($Step -eq 1) { 'Visible' } else { 'Collapsed' }
+    $wizPage2.Visibility = if ($Step -eq 2) { 'Visible' } else { 'Collapsed' }
+    $wizPage3.Visibility = if ($Step -eq 3) { 'Visible' } else { 'Collapsed' }
+    $wizPage4.Visibility = if ($Step -eq 4) { 'Visible' } else { 'Collapsed' }
+    $wizPage5.Visibility = if ($Step -eq 5) { 'Visible' } else { 'Collapsed' }
+    $btnWizBack.Visibility = if ($Step -gt 1) { 'Visible' } else { 'Collapsed' }
+    $btnWizNext.Content = if ($Step -ge 5) { 'Primijeni' } else { 'Dalje' }
+    # Popuni sadrzaj za trenutni korak
+    switch ($Step) {
+        2 {
+            $txtWizModsPath.Text = $script:WizardState.ModsPath
+        }
+        3 {
+            $gs = Read-GameSettings
+            $script:WizardState.SkipGiantsIntro = -not [bool]$gs.introScene
+            $chkWizSkipIntro.IsChecked = $script:WizardState.SkipGiantsIntro
+            $chkWizBackup.IsChecked = $script:WizardState.DoBackup
+            if ($script:WizardState.SelectedSave) {
+                $sg = $script:WizardState.SelectedSave
+                $txtWizSaveInfo.Text = @(
+                    "Slot: $($sg.Slot)"
+                    "Naziv: $($sg.Name)"
+                    "Mapa: $($sg.MapTitle)"
+                    "Novac: $($sg.Money)"
+                    "Vrijeme igre: $($sg.PlayTime)"
+                    "Zadnja izmjena: $($sg.LastWrite)"
+                    "Velicina: $($sg.SizeMb) MB"
+                ) -join "`n"
+            } else {
+                $txtWizSaveInfo.Text = '(nema odabranog savea)'
+            }
+        }
+        4 {
+            Ensure-ServerModProfile | Out-Null
+            $profiles = @(Get-ModProfileList)
+            if ($profiles.Count -eq 0) {
+                $profiles = @([PSCustomObject]@{ Id = ''; Label = '(nema profila — koristi trenutni mods folder)' })
+            }
+            $lstWizProfiles.ItemsSource = $profiles
+            if ($script:WizardState.ProfileId) {
+                $sel = $profiles | Where-Object { $_.Id -eq $script:WizardState.ProfileId } | Select-Object -First 1
+                if ($sel) { $lstWizProfiles.SelectedItem = $sel }
+            } elseif ($profiles.Count -gt 0) {
+                $lstWizProfiles.SelectedIndex = 0
+            }
+        }
+        5 {
+            $sel = if ($script:WizardState.SelectedSave) { "Slot $($script:WizardState.SelectedSave.Slot) - $($script:WizardState.SelectedSave.Name)" } else { '(nije odabran)' }
+            $intro = if ($chkWizSkipIntro.IsChecked) { 'preskocen' } else { 'ukljucen' }
+            $bak = if ($chkWizBackup.IsChecked) { 'da' } else { 'ne' }
+            $prof = if ($script:WizardState.ProfileLabel) { $script:WizardState.ProfileLabel } else { '(zadani)' }
+            $txtWizSummary.Text = @(
+                "Save: $sel"
+                "Mod folder: $($script:WizardState.ModsPath)"
+                "Mod profil: $prof"
+                "Giants intro: $intro"
+                "Backup savea: $bak"
+                ""
+                "Klikni 'Primijeni' za spremanje promjena u gameSettings.xml"
+            ) -join "`n"
+        }
+    }
+}
+
+function Apply-InlineWizard {
+    $st = $script:WizardState
+    # Backup
+    if ($chkWizBackup.IsChecked -and $st.SelectedSave -and $st.SelectedSave.Folder -and (Test-Path $st.SelectedSave.Folder)) {
+        $bakRoot = Join-Path $env:APPDATA 'SR-Launcher\save-backups'
+        if (-not (Test-Path $bakRoot)) { New-Item -ItemType Directory -Path $bakRoot -Force | Out-Null }
+        $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+        $dest = Join-Path $bakRoot "savegame$($st.SelectedSave.Slot)_$stamp"
+        Copy-Item $st.SelectedSave.Folder $dest -Recurse -Force
+        Write-Log "Save wizard backup: $dest"
+    }
+    # Mods folder
+    if ($st.ModsPath) {
+        if (-not (Test-Path $st.ModsPath)) { New-Item -ItemType Directory -Path $st.ModsPath -Force | Out-Null }
+        $script:Config.modsPath = $st.ModsPath
+        if ($txtModsPath) { $txtModsPath.Text = $st.ModsPath }
+        Update-ModsDirectoryOverride $st.ModsPath | Out-Null
+    }
+    # Profil
+    if ($st.ProfileId) {
+        $store = Get-ModProfilesStore
+        if ($store.profiles -and $store.profiles.PSObject.Properties[$st.ProfileId]) {
+            $p = $store.profiles.($st.ProfileId)
+            if ($st.ModsPath) { $p.modsPath = $st.ModsPath }
+            $p.updatedAt = (Get-Date).ToString('o')
+            $store.activeProfileId = $st.ProfileId
+            Save-ModProfilesStore $store
+        }
+    }
+    # Intro scene
+    $skipIntro = [bool]$chkWizSkipIntro.IsChecked
+    $introVal = if ($skipIntro) { 'false' } else { 'true' }
+    Write-GameSetting 'isIntroActive' $introVal | Out-Null
+    if ($chkIntroScene) { $chkIntroScene.IsChecked = ($introVal -eq 'true') }
+    $script:Config | Add-Member -NotePropertyName launchSkipIntro -NotePropertyValue $skipIntro -Force
+    if ($chkLaunchSkipIntro) { $chkLaunchSkipIntro.IsChecked = $skipIntro }
+    Save-Config
+    Update-SidebarLibraryCounts
+    try { Show-Toast 'Save konfiguracija primijenjena!' 'success' 4500 } catch {}
+    # Resetiraj wizard na korak 1
+    $script:WizardState.Step = 1
+    $script:WizardState.SelectedSave = $null
+    Refresh-IgraPage
+    Set-WizardStep 1
+}
+
+# Wizard navigacija
+if ($btnWizBrowseMods) {
+    $btnWizBrowseMods.Add_Click({
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $fb = New-Object System.Windows.Forms.FolderBrowserDialog
+        $fb.Description = 'Odaberi FS25 mods folder'
+        if ($txtWizModsPath.Text) { $fb.SelectedPath = $txtWizModsPath.Text }
+        if ($fb.ShowDialog() -eq 'OK') { $txtWizModsPath.Text = $fb.SelectedPath }
+    })
+}
+
+if ($btnWizBack) {
+    $btnWizBack.Add_Click({
+        if ($script:WizardState.Step -gt 1) {
+            Set-WizardStep ($script:WizardState.Step - 1)
+        }
+    })
+}
+
+if ($btnWizNext) {
+    $btnWizNext.Add_Click({
+        $step = $script:WizardState.Step
+        # Validacija i spremanje podataka iz trenutnog koraka
+        if ($step -eq 1) {
+            if (-not $lstSavegames.SelectedItem) {
+                Show-SRDialog 'Odaberi savegame slot u listi.' 'Konfiguriraj save' 'Warning'
+                return
+            }
+            $script:WizardState.SelectedSave = $lstSavegames.SelectedItem
+        }
+        if ($step -eq 2) {
+            $script:WizardState.ModsPath = $txtWizModsPath.Text.Trim()
+            if ($script:WizardState.ModsPath -and -not (Test-Path $script:WizardState.ModsPath)) {
+                $r = Show-SRConfirm "Folder ne postoji:`n$($script:WizardState.ModsPath)`n`nNastaviti?" 'Konfiguriraj save' 'Da' 'Ne'
+                if ($r -ne 'Yes') { return }
+            }
+        }
+        if ($step -eq 3) {
+            $script:WizardState.SkipGiantsIntro = [bool]$chkWizSkipIntro.IsChecked
+            $script:WizardState.DoBackup = [bool]$chkWizBackup.IsChecked
+        }
+        if ($step -eq 4 -and $lstWizProfiles.SelectedItem) {
+            $pi = $lstWizProfiles.SelectedItem
+            $script:WizardState.ProfileId = if ($pi.Id) { [string]$pi.Id } else { '' }
+            $script:WizardState.ProfileLabel = if ($pi.Label) { [string]$pi.Label } else { $script:WizardState.ProfileId }
+            if ($pi.Mods -and -not $script:WizardState.ModsPath) {
+                $script:WizardState.ModsPath = [string]$pi.Mods
+                $txtWizModsPath.Text = $script:WizardState.ModsPath
+            }
+        }
+        if ($step -ge 5) {
+            try {
+                Apply-InlineWizard
+            } catch {
+                Show-SRDialog "Primjena nije uspjela:`n$($_.Exception.Message)" 'Konfiguriraj save' 'Warning'
+            }
+            return
+        }
+        Set-WizardStep ($step + 1)
+    })
+}
+
+# ============================================================
+# SAVE WIZARD (legacy dialog — zadrzano za kompatibilnost)
 # ============================================================
 function Show-SaveWizard {
     $dlg = New-Object System.Windows.Window
