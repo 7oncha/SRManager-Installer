@@ -35,9 +35,9 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "SR Manager - Instalacija"
 !define MUI_WELCOMEPAGE_TEXT "Ovaj program ce instalirati SR Manager (Slavonska Ravnica launcher za FS25) na tvoj racunal.$\r$\n$\r$\nPreporucamo zatvoriti sve ostale aplikacije prije nastavka.$\r$\n$\r$\nKlikni Dalje za nastavak."
-!define MUI_FINISHPAGE_RUN "wscript.exe"
-!define MUI_FINISHPAGE_RUN_PARAMETERS '"$INSTDIR\SR Manager.vbs"'
+!define MUI_FINISHPAGE_RUN "$INSTDIR\SR Manager.vbs"
 !define MUI_FINISHPAGE_RUN_TEXT "Pokreni SR Manager"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchSRManager
 !define MUI_FINISHPAGE_LINK "Discord: Slavonska Ravnica"
 !define MUI_FINISHPAGE_LINK_LOCATION "${WEBSITE}"
 
@@ -117,6 +117,11 @@ Section "Instaliraj" SecInstall
         "" 0 SW_SHOWNORMAL "" "Deinstaliraj SR Manager"
 
 SectionEnd
+
+; Funkcija za pokretanje launche-a bez CMD prozora
+Function LaunchSRManager
+    ExecShell "" "$INSTDIR\SR Manager.vbs"
+FunctionEnd
 
 ; ============================================================
 ;  Deinstalacija
