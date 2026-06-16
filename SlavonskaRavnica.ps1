@@ -134,13 +134,13 @@ function Get-Hwid {
         $mg = ""
         try {
             $mg = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Cryptography" -Name MachineGuid -ErrorAction Stop).MachineGuid
-        } catch {}
+        } catch { Write-Log "HWID: MachineGuid nedostupan: $($_.Exception.Message)" }
         # CPU ID
         $cpu = ""
-        try { $cpu = (Get-WmiObject Win32_Processor -ErrorAction Stop | Select-Object -First 1).ProcessorId } catch {}
+        try { $cpu = (Get-WmiObject Win32_Processor -ErrorAction Stop | Select-Object -First 1).ProcessorId } catch { Write-Log "HWID: ProcessorId nedostupan: $($_.Exception.Message)" }
         # Motherboard SN
         $mb = ""
-        try { $mb = (Get-WmiObject Win32_BaseBoard -ErrorAction Stop).SerialNumber } catch {}
+        try { $mb = (Get-WmiObject Win32_BaseBoard -ErrorAction Stop).SerialNumber } catch { Write-Log "HWID: Motherboard SN nedostupan: $($_.Exception.Message)" }
         $raw = "$mg|$cpu|$mb"
         if ($raw -eq "||") { $raw = $env:COMPUTERNAME + "|" + $env:USERNAME }
         return Get-SHA256 $raw
@@ -178,7 +178,7 @@ function Get-LicenseCache {
     } catch { return $null }
 }
 function Clear-LicenseCache {
-    try { if (Test-Path $script:LicenseCachePath) { Remove-Item $script:LicenseCachePath -Force } } catch {}
+    try { if (Test-Path $script:LicenseCachePath) { Remove-Item $script:LicenseCachePath -Force } } catch { Write-Log "WARN brisanje licence cache: $($_.Exception.Message)" }
 }
 
 function Update-LicenseUi {
@@ -210,7 +210,7 @@ function Update-LicenseUi {
             $exp = [datetime]::Parse($cache.expiresAt).ToLocalTime()
             $expLine = "Vrijedi do: $($exp.ToString('dd.MM.yyyy HH:mm'))"
         }
-    } catch {}
+    } catch { Write-Log "WARN parsiranje datuma licence: $($_.Exception.Message)" }
     if ($txtLicenseExpiry) { $txtLicenseExpiry.Text = $expLine }
     if ($licenseBadge) {
         $licenseBadge.Visibility = 'Visible'
@@ -227,8 +227,8 @@ function Update-LicenseUi {
 # ============================================================
 function Get-LicenseApiConfig {
     $sources = @()
-    try { if ($script:Config -and $script:Config.licenseApi) { $sources += $script:Config.licenseApi } } catch {}
-    try { if ($script:SharedConfig -and $script:SharedConfig.licenseApi) { $sources += $script:SharedConfig.licenseApi } } catch {}
+    try { if ($script:Config -and $script:Config.licenseApi) { $sources += $script:Config.licenseApi } } catch { Write-Log "WARN citanje licenseApi iz Config: $($_.Exception.Message)" }
+    try { if ($script:SharedConfig -and $script:SharedConfig.licenseApi) { $sources += $script:SharedConfig.licenseApi } } catch { Write-Log "WARN citanje licenseApi iz SharedConfig: $($_.Exception.Message)" }
     # Fallback: read sr_shared_config.json next to the script
     try {
         $localPath = Join-Path $PSScriptRoot 'sr_shared_config.json'
@@ -236,7 +236,7 @@ function Get-LicenseApiConfig {
             $local = Get-Content $localPath -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($local.licenseApi) { $sources += $local.licenseApi }
         }
-    } catch {}
+    } catch { Write-Log "WARN citanje sr_shared_config.json za licenseApi: $($_.Exception.Message)" }
     foreach ($api in $sources) {
         if ($api -and $api.url -and $api.token -and ($api.url -notmatch 'REPLACE-ME') -and ($api.token -notmatch 'REPLACE')) {
             return @{ url = ([string]$api.url).TrimEnd('/'); token = [string]$api.token }
@@ -301,7 +301,7 @@ function Get-ActiveServerId {
         $srv = Get-ActiveServer
         if ($srv -and $srv.id) { return [string]$srv.id }
         if ($srv -and $srv.name) { return [string]$srv.name }
-    } catch {}
+    } catch { Write-Log "WARN dohvat aktivnog server ID-a: $($_.Exception.Message)" }
     return ''
 }
 
@@ -390,7 +390,7 @@ function Get-FileSha256 {
 function Get-LocalModHash {
     param([System.IO.FileInfo]$File)
     if (-not $script:Config.modHashCache) {
-        try { $script:Config | Add-Member -NotePropertyName modHashCache -NotePropertyValue (@{}) -Force } catch {}
+        try { $script:Config | Add-Member -NotePropertyName modHashCache -NotePropertyValue (@{}) -Force } catch { Write-Log "WARN inicijalizacija modHashCache: $($_.Exception.Message)" }
     }
     $cache = $script:Config.modHashCache
     $key = $File.FullName
@@ -398,14 +398,14 @@ function Get-LocalModHash {
     try {
         $entry = $cache.$key
         if ($entry -and $entry.sig -eq $sigNew -and $entry.sha) { return [string]$entry.sha }
-    } catch {}
+    } catch { Write-Log "WARN citanje mod hash cache za ${key}: $($_.Exception.Message)" }
     $sha = Get-FileSha256 -Path $File.FullName
     if ($sha) {
         try {
             $newEntry = [PSCustomObject]@{ sig = $sigNew; sha = $sha }
             if ($cache -is [hashtable]) { $cache[$key] = $newEntry }
             else { $cache | Add-Member -NotePropertyName $key -NotePropertyValue $newEntry -Force }
-        } catch {}
+        } catch { Write-Log "WARN spremanje mod hash cache za ${key}: $($_.Exception.Message)" }
     }
     return $sha
 }
@@ -443,7 +443,7 @@ function Test-License {
     }
     if ($r.ok) {
         $expIso = $null
-        try { if ($r.expiresAt) { $expIso = ([datetime]'1970-01-01T00:00:00Z').AddMilliseconds([double]$r.expiresAt).ToUniversalTime().ToString('o') } } catch {}
+        try { if ($r.expiresAt) { $expIso = ([datetime]'1970-01-01T00:00:00Z').AddMilliseconds([double]$r.expiresAt).ToUniversalTime().ToString('o') } } catch { Write-Log "WARN parsiranje expiresAt iz licence: $($_.Exception.Message)" }
         return @{
             ok = $true
             entry = @{ expiresAt = $expIso; discordId = [string]$r.discordId; permanent = [bool]$r.permanent }
@@ -474,7 +474,7 @@ function Send-LicenseHeartbeat {
         Invoke-LicenseApi -Path 'heartbeat' -Body @{
             key = $Key; hwid = $hwid; gameUid = "$($env:COMPUTERNAME)/$($env:USERNAME)"; playerName = $playerName
         } | Out-Null
-    } catch {}
+    } catch { Write-Log "WARN heartbeat greska: $($_.Exception.Message)" }
 }
 
 function Start-LicenseSessionWatcher {
@@ -1054,7 +1054,7 @@ function Add-RecentModSyncEntry {
         if ($list.Count -gt 5) { $list = $list[0..4] }
         $script:Config | Add-Member -NotePropertyName recentModSync -NotePropertyValue $list -Force
         Save-Config
-    } catch {}
+    } catch { Write-Log "WARN spremanje recent mod sync: $($_.Exception.Message)" }
 }
 
 function Update-DashboardSyncPanel {
@@ -1089,7 +1089,7 @@ function Update-DashboardSyncPanel {
                 }
                 [void]$items.Add([PSCustomObject]@{ Line = "$nm - $lbl"; Time = '' })
             }
-        } catch {}
+        } catch { Write-Log "WARN dohvat mod promjena za dashboard: $($_.Exception.Message)" }
     }
     $lstRecentSyncMods.ItemsSource = $null
     if ($items.Count -gt 0) { $lstRecentSyncMods.ItemsSource = @($items.ToArray()) }
@@ -1624,7 +1624,7 @@ function Get-ModMetaFromZip {
         } finally {
             $zip.Dispose()
         }
-    } catch {}
+    } catch { Write-Log "WARN citanje mod meta iz ZIP-a ($ZipPath): $($_.Exception.Message)" }
     return $result
 }
 
@@ -1672,7 +1672,7 @@ function Get-ModThumbnailFromZip {
         } finally {
             $zip.Dispose()
         }
-    } catch {}
+    } catch { Write-Log "WARN ekstrakcija thumbnail-a iz ZIP-a ($ZipPath): $($_.Exception.Message)" }
     return $null
 }
 
@@ -2325,7 +2325,7 @@ function Get-LibrarySidebarCounts {
     try {
         $fav = Get-ModFavoritesStore
         $counts.Favourites = @($fav.favorites).Count
-    } catch {}
+    } catch { Write-Log "WARN citanje mod favorita za sidebar: $($_.Exception.Message)" }
     $path = Get-EffectiveModsPath
     if (-not $path) { $path = $script:Config.modsPath }
     if (-not $path -or -not (Test-Path $path)) { return $counts }
@@ -2342,7 +2342,7 @@ function Get-LibrarySidebarCounts {
                     if ($z.Name -match 'dlc|DLC') { $counts.DLC++ }
                 }
             }
-        } catch {}
+        } catch { Write-Log "WARN mod meta za sidebar ($($z.Name)): $($_.Exception.Message)" }
     }
     return $counts
 }
@@ -2745,7 +2745,7 @@ function Get-AppVersionFromScript {
                 if ($m.Success) { return $m.Groups[1].Value }
             }
         }
-    } catch {}
+    } catch { Write-Log "WARN citanje verzije iz skripte ($Path): $($_.Exception.Message)" }
     return $null
 }
 
@@ -3014,7 +3014,7 @@ function Load-Config {
         try {
             $json = (Read-TextFileUtf8 -Path $script:ConfigPath) | ConvertFrom-Json
             if ($json.servers) { return (Merge-UserGameSettings $json) }
-        } catch {}
+        } catch { Write-Log "GRESKA ucitavanje konfiguracije ($($script:ConfigPath)): $($_.Exception.Message)" }
     }
     $config = [PSCustomObject]@{
         version      = "2.1"
@@ -3071,7 +3071,7 @@ function Sync-SharedConfig {
                 $shared = $parsed
                 break
             }
-        } catch { }
+        } catch { Write-Log "WARN shared config download ($url): $($_.Exception.Message)" }
     }
     if (-not $shared) { return $false }
 
@@ -3243,7 +3243,7 @@ function Get-ServerModList {
             }
             return $manifest
         }
-    } catch {}
+    } catch { Write-Log "WARN bot manifest dohvat: $($_.Exception.Message) - fallback na mods.html" }
 
     # Fallback: scrape mods.html (legacy path, no SHA-256 available).
     $server = Get-ActiveServer
@@ -6531,9 +6531,9 @@ $splashWin = Show-SplashScreen
 $splashWin.Show()
 Write-BootLog "OK: WPF Splash shown"
 Set-SplashStep "Ucitavam konfiguraciju..." 10
-try { Initialize-LauncherConfig } catch {}
+try { Initialize-LauncherConfig } catch { Write-Log "GRESKA inicijalizacija konfiguracije: $($_.Exception.Message)" }
 Write-BootLog "OK: Config loaded"
-try { Sync-SharedConfig } catch {}
+try { Sync-SharedConfig } catch { Write-Log "GRESKA sinkronizacija shared config-a: $($_.Exception.Message)" }
 Write-BootLog "OK: SharedConfig synced"
 try {
     Ensure-ServerMpFolder | Out-Null
@@ -6543,7 +6543,7 @@ try {
     } elseif ($script:Config.modsPath -and (Test-Path $script:Config.modsPath)) {
         $script:PreloadedLocalModCount = @(Get-ChildItem $script:Config.modsPath -Filter "*.zip" -ErrorAction SilentlyContinue).Count
     }
-} catch {}
+} catch { Write-Log "WARN priprema mod foldera: $($_.Exception.Message)" }
 
 Write-BootLog "OK: Pre-XAML preload done"
 Set-SplashStep "Ucitavam sucelje..." 28
@@ -6596,7 +6596,7 @@ try {
             break
         }
     }
-} catch {}
+} catch { Write-Log "WARN ucitavanje ikone prozora: $($_.Exception.Message)" }
 
 Write-BootLog "START: FindName bindings"
 $titleBar            = $window.FindName("titleBar")
@@ -7993,7 +7993,7 @@ function Update-ServerButtons {
                 Ensure-ServerMpFolder | Out-Null
                 Sync-MpFolderQuickPick
                 Refresh-MpFoldersPage
-            } catch {}
+            } catch { Write-Log "WARN MP folder nakon promjene servera: $($_.Exception.Message)" }
         })
         # Desni klik: brisi custom server
         $bd.Add_MouseRightButtonUp({
@@ -8085,7 +8085,7 @@ function Read-GameSettings {
             } elseif ($content -match '<developmentControls\s+value="([^"]*)"') {
                 $result.devConsole = ($Matches[1] -eq "true")
             }
-        } catch {}
+        } catch { Write-Log "WARN citanje gameSettings.xml: $($_.Exception.Message)" }
     }
     return $result
 }
@@ -8326,7 +8326,7 @@ function Resolve-LocalModMeta {
         $zipMeta = Get-ModMetaFromZip -ZipPath $meta.LocalZipPath
         if ($zipMeta.ModType) { $meta.ModType = $zipMeta.ModType }
         if ($zipMeta.Version -and $meta.Version -eq '-') { $meta.Version = $zipMeta.Version }
-    } catch {}
+    } catch { Write-Log "WARN mod meta iz ZIP-a ($($LocalFile.Name)): $($_.Exception.Message)" }
     return $meta
 }
 
@@ -8930,8 +8930,8 @@ $btnSaveServer.Add_Click({
     $idx = [int]$script:Config.activeServer
     $script:Config.servers[$idx].name = $txtSrvName.Text
     $script:Config.servers[$idx].ip = $txtSrvIp.Text
-    try { $script:Config.servers[$idx].webPort = [int]$txtSrvWebPort.Text } catch {}
-    try { $script:Config.servers[$idx].gamePort = [int]$txtSrvGamePort.Text } catch {}
+    try { $script:Config.servers[$idx].webPort = [int]$txtSrvWebPort.Text } catch { Write-Log "WARN parsiranje webPort: $($_.Exception.Message)" }
+    try { $script:Config.servers[$idx].gamePort = [int]$txtSrvGamePort.Text } catch { Write-Log "WARN parsiranje gamePort: $($_.Exception.Message)" }
     $script:Config.servers[$idx].statsCode = $txtSrvStatsCode.Text
     $script:Config.servers[$idx].password = $txtSrvPassword.Text
     Save-Config
@@ -9147,7 +9147,7 @@ $gs = if ($script:PreloadedGameSettings) { $script:PreloadedGameSettings } else 
 $chkIntroScene.IsChecked = $gs.introScene
 $chkDevConsole.IsChecked = $gs.devConsole
 
-try { Ensure-ServerMpFolder | Out-Null } catch {}
+try { Ensure-ServerMpFolder | Out-Null } catch { Write-Log "WARN MP folder inicijalizacija: $($_.Exception.Message)" }
 $effModsForCount = Get-EffectiveModsPath
 $localModCount = if ($null -ne $script:PreloadedLocalModCount -and -not $effModsForCount) {
     $script:PreloadedLocalModCount
@@ -9170,7 +9170,7 @@ try {
     Ensure-ServerMpFolder | Out-Null
     Update-SidebarLibraryCounts
     Sync-MpFolderQuickPick
-} catch {}
+} catch { Write-Log "WARN MP folder/sidebar inicijalizacija: $($_.Exception.Message)" }
 Write-Log "Serveri: $($script:Config.servers.Count)"
 Write-Log "GitHub: $($script:GitHubRepo)"
 Write-Log "gameSettings.xml: $(Get-GameSettingsPath)"
@@ -9705,7 +9705,7 @@ try {
         "#E5484D" { $themeRed.IsChecked    = $true }
         default   { $themeGold.IsChecked   = $true }
     }
-} catch {}
+} catch { Write-Log "WARN ucitavanje korisnickih postavki u UI: $($_.Exception.Message)" }
 
 $btnExportConfig.Add_Click({
     $sfd = New-Object Microsoft.Win32.SaveFileDialog
@@ -9750,7 +9750,7 @@ $window.Add_Loaded({
             } else {
                 Refresh-ServerStatus -Silent
             }
-        } catch {}
+        } catch { Write-Log "WARN osvjezavanje server statusa: $($_.Exception.Message)" }
         try {
             if ($script:PreloadedModList) {
                 Refresh-ModList -PreloadedServerMods $script:PreloadedModList
@@ -9758,7 +9758,7 @@ $window.Add_Loaded({
             } elseif (-not $script:ModListCached) {
                 Refresh-ModList
             }
-        } catch {}
+        } catch { Write-Log "WARN ucitavanje mod liste: $($_.Exception.Message)" }
         try {
             $gs = $script:PreloadedGameSettings
             if (-not $gs) { $gs = Read-GameSettings }
@@ -9767,7 +9767,7 @@ $window.Add_Loaded({
                 $chkDevConsole.IsChecked = $gs.devConsole
             }
             $script:PreloadedGameSettings = $null
-        } catch {}
+        } catch { Write-Log "WARN ucitavanje game postavki u UI: $($_.Exception.Message)" }
     }) | Out-Null
 
     # Auto-refresh status every 60 seconds (tiho - bez log spama)
@@ -10286,15 +10286,15 @@ if (-not (Ensure-LicenseValid)) {
 
 Write-BootLog "OK: License valid"
 Set-SplashStep "Sinkronizacija servera..." 58
-try { $script:PreloadedServerStatus = Get-ServerStatus } catch {}
+try { $script:PreloadedServerStatus = Get-ServerStatus } catch { Write-Log "WARN dohvat server statusa pri startu: $($_.Exception.Message)" }
 Write-BootLog "OK: Server status done"
 
 Set-SplashStep "Provjera modova..." 74
-try { $script:PreloadedModList = Get-ServerModList } catch {}
+try { $script:PreloadedModList = Get-ServerModList } catch { Write-Log "WARN preload mod liste pri startu: $($_.Exception.Message)" }
 Write-BootLog "OK: Mod list done"
 
 Set-SplashStep "Ucitavam opcije igre..." 78
-try { $script:PreloadedGameSettings = Read-GameSettings } catch {}
+try { $script:PreloadedGameSettings = Read-GameSettings } catch { Write-Log "WARN citanje game postavki pri startu: $($_.Exception.Message)" }
 Write-BootLog "OK: Game settings done"
 Invoke-SplashPump
 
@@ -10360,7 +10360,7 @@ $window.Add_Loaded({
         try {
             $script:Config | Add-Member -NotePropertyName lastLaunchAt -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
             Save-Config
-        } catch {}
+        } catch { Write-Log "WARN spremanje lastLaunchAt: $($_.Exception.Message)" }
     }) | Out-Null
 })
 
@@ -10370,7 +10370,7 @@ try {
     } elseif ($script:Config.windowMaximize) {
         Set-WindowWorkAreaBounds
     }
-} catch {}
+} catch { Write-Log "WARN primjena fullscreen/maximize postavke: $($_.Exception.Message)" }
 
 # WPF DispatcherUnhandledException — sprijecava tiho gasenje aplikacije
 try {

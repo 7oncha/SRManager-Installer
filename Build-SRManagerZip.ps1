@@ -64,7 +64,7 @@ try {
 
 Write-Host '[4] Ikone + upute iz package/...'
 Get-Url "$rawBase/sr_logo.ico" (Join-Path $stage 'sr_logo.ico')
-try { Get-Url "$rawBase/sr_logo.png" (Join-Path $stage 'sr_logo.png') } catch {}
+try { Get-Url "$rawBase/sr_logo.png" (Join-Path $stage 'sr_logo.png') } catch { Write-Host "  (sr_logo.png nije dostupan - preskacemo)" }
 
 $pkg = Join-Path $root 'package'
 Copy-Item (Join-Path $pkg 'CITAJME.txt') (Join-Path $stage 'CITAJME.txt') -Force
