@@ -25,6 +25,14 @@ Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Windows.Forms
 
+# Globalni exception handleri — sprijecavaju tiho gasenje aplikacije
+try {
+    [System.AppDomain]::CurrentDomain.Add_UnhandledException({
+        param($s, $e)
+        try { Write-Log "FATALNA GRESKA (AppDomain): $($e.ExceptionObject.ToString())" } catch {}
+    })
+} catch {}
+
 function Show-EarlySplash {
     if ($script:EarlySplash) { return }
     $f = New-Object System.Windows.Forms.Form
@@ -1541,10 +1549,10 @@ function Start-ModThumbnailLoads {
             New-Item -ItemType Directory -Path $script:ModThumbsPath -Force | Out-Null
         }
     } catch {}
-    # Semafor ogranicava broj istovremenih ZIP operacija (sprijecava freeze kod 400+ modova)
-    if (-not $script:ThumbSemaphore) {
-        $script:ThumbSemaphore = New-Object System.Threading.SemaphoreSlim(4, 4)
-    }
+    # Zaustavi prethodni timer ako postoji
+    if ($script:ThumbTimer) { try { $script:ThumbTimer.Stop() } catch {} }
+    # Kreiraj red za obradu thumbnailova na UI threadu (ThreadPool ne moze pozivati PS funkcije)
+    $script:ThumbQueue = New-Object System.Collections.Queue
     foreach ($item in @($Items)) {
         if ($item.HasThumb -or $item.ThumbLoading) { continue }
         if (-not $item.LocalZipPath -or -not (Test-Path $item.LocalZipPath)) { continue }
@@ -1557,38 +1565,32 @@ function Start-ModThumbnailLoads {
             continue
         }
         $item.ThumbLoading = $true
-        $zipPath = [string]$item.LocalZipPath
-        $itRef = $item
-        $sem = $script:ThumbSemaphore
-        $cb = [System.Threading.WaitCallback]{
-            param($state)
-            $path = $null
-            try {
-                $state.Sem.Wait()
-                try { $path = Get-ModThumbnailFromZip -ZipPath $state.Zip } catch {}
-            } finally {
-                try { $state.Sem.Release() } catch {}
-            }
-            $state.Window.Dispatcher.BeginInvoke([Action]{
-                try {
-                    if ($path -and (Test-Path $path)) {
-                        $img = New-ModBitmapImage $path
-                        if ($img) {
-                            $state.Item.ThumbSource = $img
-                            $state.Item.HasThumb = $true
-                        }
-                    }
-                } catch {}
-                finally { $state.Item.ThumbLoading = $false }
-            }, [System.Windows.Threading.DispatcherPriority]::Background) | Out-Null
-        }
-        [void][System.Threading.ThreadPool]::QueueUserWorkItem($cb, @{
-            Zip    = $zipPath
-            Item   = $itRef
-            Window = $window
-            Sem    = $sem
-        })
+        $script:ThumbQueue.Enqueue($item)
     }
+    if ($script:ThumbQueue.Count -eq 0) { return }
+    # DispatcherTimer — obradjuje po 2 thumbnailova svakih 80ms (ne blokira UI)
+    $script:ThumbTimer = New-Object System.Windows.Threading.DispatcherTimer
+    $script:ThumbTimer.Interval = [TimeSpan]::FromMilliseconds(80)
+    $script:ThumbTimer.Add_Tick({
+        $batch = 2
+        while ($batch -gt 0 -and $script:ThumbQueue.Count -gt 0) {
+            $batch--
+            $it = $script:ThumbQueue.Dequeue()
+            try {
+                $path = Get-ModThumbnailFromZip -ZipPath $it.LocalZipPath
+                if ($path -and (Test-Path $path)) {
+                    $img = New-ModBitmapImage $path
+                    if ($img) {
+                        $it.ThumbSource = $img
+                        $it.HasThumb = $true
+                    }
+                }
+            } catch {}
+            $it.ThumbLoading = $false
+        }
+        if ($script:ThumbQueue.Count -eq 0) { $script:ThumbTimer.Stop() }
+    })
+    $script:ThumbTimer.Start()
 }
 
 function Get-FS25UserDataPath {
@@ -4654,41 +4656,36 @@ $script:PreloadedLocalModCount = $null
                                 </Grid>
                             </Border>
 
-                            <!-- Stats Row (StatusCard layout kao farmbuddy dashboard) -->
-                            <UniformGrid Columns="4" Margin="0,0,0,16">
-                                <Border Margin="0,0,6,0" Style="{StaticResource SrCard}" MinHeight="96" Padding="16,14">
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="MOJI MODOVI" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
-                                        <TextBlock x:Name="txtMyModCount" Text="-" FontSize="28"
+                            <!-- Compact mod stats strip -->
+                            <Border Style="{StaticResource SrCard}" Padding="16,12" Margin="0,0,0,16">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" HorizontalAlignment="Center">
+                                        <TextBlock Text="MOJI MODOVI" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="txtMyModCount" Text="-" FontSize="22"
                                                    FontWeight="Bold" Foreground="{StaticResource Gold}"
-                                                   FontFamily="Segoe UI"/>
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
                                     </StackPanel>
-                                </Border>
-                                <Border Margin="3,0,3,0" Style="{StaticResource SrCard}" MinHeight="96" Padding="16,14">
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="SERVER" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
-                                        <TextBlock x:Name="txtServerModCount" Text="-" FontSize="28"
+                                    <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                                        <TextBlock Text="SERVER" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="txtServerModCount" Text="-" FontSize="22"
                                                    FontWeight="Bold" Foreground="{StaticResource Gold}"
-                                                   FontFamily="Segoe UI"/>
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
                                     </StackPanel>
-                                </Border>
-                                <Border Margin="3,0,3,0" Style="{StaticResource SrCard}" MinHeight="96" Padding="16,14">
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="FALI TI" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
-                                        <TextBlock x:Name="txtMissingCount" Text="-" FontSize="28"
+                                    <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+                                        <TextBlock Text="FALI TI" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="txtMissingCount" Text="-" FontSize="22"
                                                    FontWeight="Bold" Foreground="{StaticResource DangerRed}"
-                                                   FontFamily="Segoe UI"/>
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
                                     </StackPanel>
-                                </Border>
-                                <Border Margin="6,0,0,0" Style="{StaticResource SrCard}" MinHeight="96" Padding="16,14">
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="VELICINA" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
-                                        <TextBlock x:Name="txtModSizeTotal" Text="-" FontSize="28"
-                                                   FontWeight="Bold" Foreground="#9d8df5"
-                                                   FontFamily="Segoe UI"/>
-                                    </StackPanel>
-                                </Border>
-                            </UniformGrid>
+                                </Grid>
+                            </Border>
+                            <!-- Skriveni elementi za kompatibilnost s kodom -->
+                            <TextBlock x:Name="txtModSizeTotal" Visibility="Collapsed"/>
 
                             <Border x:Name="borderModsPathWarn" Visibility="Collapsed"
                                     Background="#2a1515" CornerRadius="8" Padding="14,10"
@@ -4697,59 +4694,17 @@ $script:PreloadedLocalModCount = $null
                                            Foreground="#ffb4b4" FontFamily="Segoe UI" TextWrapping="Wrap"/>
                             </Border>
 
-                            <!-- Activity / sync info -->
-                            <Border Style="{StaticResource SrCard}" Padding="16,14">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="SYNC" Style="{StaticResource SectionLabel}"
-                                               VerticalAlignment="Top" Margin="0,2,16,0"/>
-                                    <StackPanel Grid.Column="1">
-                                        <TextBlock x:Name="txtLastSync" Text="Zadnji sync: nikad"
-                                                   FontSize="13" Foreground="{StaticResource BodyText}" FontFamily="Segoe UI"
-                                                   LineHeight="20"/>
-                                        <TextBlock Text="Zadnjih 5 promjena (manifest)" Style="{StaticResource SectionLabel}"
-                                                   Margin="0,12,0,8"/>
-                                        <ItemsControl x:Name="lstRecentSyncMods">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Grid Margin="0,0,0,6">
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="*"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="{Binding Line}"
-                                                                   FontSize="12" Foreground="#ddd"
-                                                                   FontFamily="Segoe UI" TextTrimming="CharacterEllipsis"
-                                                                   LineHeight="18"/>
-                                                        <TextBlock Grid.Column="1" Text="{Binding Time}"
-                                                                   FontSize="10" Foreground="{StaticResource MutedText}"
-                                                                   FontFamily="Segoe UI" Margin="12,0,0,0"
-                                                                   VerticalAlignment="Top"/>
-                                                    </Grid>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
+                            <!-- Skriveni elementi za kompatibilnost -->
+                            <TextBlock x:Name="txtLastSync" Visibility="Collapsed"/>
+                            <ItemsControl x:Name="lstRecentSyncMods" Visibility="Collapsed"/>
+                            <ItemsControl x:Name="lstActivityFeed" Visibility="Collapsed"/>
 
-                            <!-- Bottom row: Fali modovi + Activity feed -->
-                            <Grid Margin="0,16,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="14"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-
-                                <!-- Fali modovi panel -->
-                                <Border Grid.Column="0" Style="{StaticResource SrCard}" MinHeight="220">
-                                    <Border.Effect>
-                                        <DropShadowEffect Color="Black" BlurRadius="14" ShadowDepth="0" Opacity="0.4"/>
-                                    </Border.Effect>
-                                    <StackPanel>
+                            <!-- Fali modovi panel (full-width) -->
+                            <Border Style="{StaticResource SrCard}" MinHeight="180" Margin="0,0,0,16">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="Black" BlurRadius="14" ShadowDepth="0" Opacity="0.4"/>
+                                </Border.Effect>
+                                <StackPanel>
                                         <Grid Margin="0,0,0,10">
                                             <TextBlock Text="FALI MODOVI" FontSize="10" Foreground="#888"
                                                        FontWeight="Bold" FontFamily="Segoe UI"/>
@@ -4826,83 +4781,6 @@ $script:PreloadedLocalModCount = $null
                                                 Margin="0,8,0,0" FontSize="11"/>
                                     </StackPanel>
                                 </Border>
-
-                                <!-- Activity feed -->
-                                <Border Grid.Column="2" Style="{StaticResource SrCard}" MinHeight="220">
-                                    <Border.Effect>
-                                        <DropShadowEffect Color="Black" BlurRadius="14" ShadowDepth="0" Opacity="0.4"/>
-                                    </Border.Effect>
-                                    <StackPanel>
-                                        <Grid Margin="0,0,0,10">
-                                            <TextBlock Text="AKTIVNOST" FontSize="10" Foreground="#888"
-                                                       FontWeight="Bold" FontFamily="Segoe UI"/>
-                                            <Border Background="#1a1408" CornerRadius="3" Padding="6,2"
-                                                    HorizontalAlignment="Right">
-                                                <StackPanel Orientation="Horizontal">
-                                                    <Border Width="6" Height="6" CornerRadius="3"
-                                                            Background="#F5C518" Margin="0,0,5,0"
-                                                            VerticalAlignment="Center">
-                                                        <Border.Effect>
-                                                            <DropShadowEffect Color="#F5C518" BlurRadius="6" ShadowDepth="0" Opacity="1"/>
-                                                        </Border.Effect>
-                                                        <Border.Triggers>
-                                                            <EventTrigger RoutedEvent="Border.Loaded">
-                                                                <BeginStoryboard>
-                                                                    <Storyboard RepeatBehavior="Forever">
-                                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                                         From="1" To="0.3" Duration="0:0:1"
-                                                                                         AutoReverse="True"/>
-                                                                    </Storyboard>
-                                                                </BeginStoryboard>
-                                                            </EventTrigger>
-                                                        </Border.Triggers>
-                                                    </Border>
-                                                    <TextBlock Text="LIVE" FontSize="8" FontWeight="Bold"
-                                                               Foreground="#F5C518" FontFamily="Segoe UI"
-                                                               VerticalAlignment="Center"/>
-                                                </StackPanel>
-                                            </Border>
-                                        </Grid>
-                                        <ItemsControl x:Name="lstActivityFeed" Height="186">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Grid Margin="0,0,0,6" Opacity="0"
-                                                          RenderTransformOrigin="0,0.5">
-                                                        <Grid.RenderTransform>
-                                                            <TranslateTransform Y="-8"/>
-                                                        </Grid.RenderTransform>
-                                                        <Grid.Triggers>
-                                                            <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                <BeginStoryboard>
-                                                                    <Storyboard>
-                                                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.Opacity)"
-                                                                                         From="0" To="1" Duration="0:0:0.4"/>
-                                                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.Y)"
-                                                                                         From="-8" To="0" Duration="0:0:0.4">
-                                                                            <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
-                                                                        </DoubleAnimation>
-                                                                    </Storyboard>
-                                                                </BeginStoryboard>
-                                                            </EventTrigger>
-                                                        </Grid.Triggers>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="50"/>
-                                                            <ColumnDefinition Width="*"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="{Binding Time}"
-                                                                   FontSize="10" Foreground="#666"
-                                                                   FontFamily="Consolas" VerticalAlignment="Top"/>
-                                                        <TextBlock Grid.Column="1" Text="{Binding Message}"
-                                                                   FontSize="12" Foreground="#ddd"
-                                                                   FontFamily="Segoe UI" TextWrapping="Wrap"
-                                                                   LineHeight="18"/>
-                                                    </Grid>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </StackPanel>
-                                </Border>
-                            </Grid>
                         </StackPanel>
                     </ScrollViewer>
 
@@ -9489,30 +9367,31 @@ Set-SplashStep "Pokrecem..." 100
 Initialize-WpfApplicationLifecycle
 
 # ============================================================
-# AUTO-UPDATE PROMPT (provjera u pozadini nakon prikaza prozora)
+# AUTO-UPDATE PROMPT (async — ne blokira UI thread, ne crasha app)
 # ============================================================
 $window.Add_Loaded({
-    try {
-        if (Check-ForUpdate) {
-            $btnUpdateNotify.Content = "Nova verzija v$($script:LatestVersion.version)!"
-            $btnUpdateNotify.Visibility = "Visible"
-            $txtUpdateInfo.Text = "v$($script:LatestVersion.version) dostupna!"
-            $updateBanner.Visibility = "Visible"
-            Write-Log "NOVA VERZIJA dostupna: v$($script:LatestVersion.version)"
-            $r = Show-SRConfirm "Dostupna je nova verzija launchera: v$($script:LatestVersion.version)`n`nTrenutna: v$($script:AppVersion)`n`nSkinuti i instalirati sada?" "Update dostupan"
-            if ($r -eq 'Yes') { Download-Update }
-        }
-    } catch { Write-Log "Auto-update prompt greska: $($_.Exception.Message)" }
+    $window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [Action]{
+        try {
+            if (Check-ForUpdate) {
+                if ($btnUpdateNotify) { $btnUpdateNotify.Content = "Nova verzija v$($script:LatestVersion.version)!"; $btnUpdateNotify.Visibility = "Visible" }
+                if ($txtUpdateInfo) { $txtUpdateInfo.Text = "v$($script:LatestVersion.version) dostupna!" }
+                if ($updateBanner) { $updateBanner.Visibility = "Visible" }
+                Write-Log "NOVA VERZIJA dostupna: v$($script:LatestVersion.version)"
+                $r = Show-SRConfirm "Dostupna je nova verzija launchera: v$($script:LatestVersion.version)`n`nTrenutna: v$($script:AppVersion)`n`nSkinuti i instalirati sada?" "Update dostupan"
+                if ($r -eq 'Yes') { Download-Update }
+            }
+        } catch { Write-Log "Auto-update prompt greska: $($_.Exception.Message)" }
+    }) | Out-Null
 })
 
 # ============================================================
-# MOD CHANGES SINCE LAST LAUNCH (server-authoritative)
+# MOD CHANGES SINCE LAST LAUNCH (async — ne blokira UI thread)
 # ============================================================
-try {
-    $sinceIso = if ($script:Config.lastLaunchAt) { [string]$script:Config.lastLaunchAt } else { $null }
-    $window.Add_Loaded({
+$script:_lastLaunchIso = if ($script:Config.lastLaunchAt) { [string]$script:Config.lastLaunchAt } else { $null }
+$window.Add_Loaded({
+    $window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [Action]{
         try {
-            $changes = Get-ModChangesSinceFromBot -SinceIso $sinceIso
+            $changes = Get-ModChangesSinceFromBot -SinceIso $script:_lastLaunchIso
             if ($changes -and $changes.Count -gt 0) {
                 $added   = @($changes | Where-Object { $_.type -eq 'added' }).Count
                 $updated = @($changes | Where-Object { $_.type -eq 'updated' }).Count
@@ -9531,14 +9410,26 @@ try {
             $script:Config | Add-Member -NotePropertyName lastLaunchAt -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
             Save-Config
         } catch {}
-    })
-} catch {}
+    }) | Out-Null
+})
 
 try {
     if ($script:Config.windowFullscreen) {
         Set-WindowFullscreen $true
     } elseif ($script:Config.windowMaximize) {
         Set-WindowWorkAreaBounds
+    }
+} catch {}
+
+# WPF DispatcherUnhandledException — sprijecava tiho gasenje aplikacije
+try {
+    $app = [System.Windows.Application]::Current
+    if ($app) {
+        $app.Add_DispatcherUnhandledException({
+            param($s, $e)
+            try { Write-Log "WPF UNHANDLED: $($e.Exception.ToString())" } catch {}
+            $e.Handled = $true
+        })
     }
 } catch {}
 
