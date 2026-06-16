@@ -70,9 +70,8 @@ Section "Instaliraj" SecInstall
     File "package\Fix-Desktop-Shortcut.bat"
     File "package\CITAJME.txt"
 
-    ; SRManager.exe wrapper (ako postoji u dist)
-    IfFileExists "$EXEDIR\SRManager.exe" 0 +2
-        File "/oname=SRManager.exe" "SRManager.exe"
+    ; SRManager.exe wrapper (opcionalan - /nonfatal za CI build bez njega)
+    File /nonfatal "SRManager.exe"
 
     ; Spremi install dir u registry
     WriteRegStr HKCU "Software\SRManager" "InstallDir" "$INSTDIR"
