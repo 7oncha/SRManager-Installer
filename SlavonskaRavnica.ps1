@@ -9182,6 +9182,8 @@ $window.Add_Loaded({
 # ============================================================
 function Show-LicenseWindow {
     param([string]$prefillKey = "", [string]$errorMsg = "")
+    # Sakrij splash prozor da ne bude iza licence prozora (2 prozora bug)
+    try { if ($script:SplashWindow) { $script:SplashWindow.Hide() } } catch {}
     $licXaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -9343,11 +9345,14 @@ function Show-LicenseWindow {
         $key = ($txt.Text).Trim()
         if (-not $key) { $err.Text = "Unesi kljuc."; $err.Visibility = "Visible"; return }
         $btnA.IsEnabled = $false; $btnA.Content = "Provjera..."
+        # Spremi key/hwid prije BeginInvoke jer [Action] delegate ne hvata lokalne varijable
+        $capturedKey = $key
+        $capturedHwid = $hwid
         # Defer actual HTTP call so the UI repaints with "Provjera..." first.
-        $licWin.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [Action]{
+        $licWin.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, ([Action]{
             $r = $null
             try {
-                $r = Test-License -key $key -hwid $hwid
+                $r = Test-License -key $capturedKey -hwid $capturedHwid
             } catch {
                 $err.Text = "Greska kod provjere: $($_.Exception.Message)"
                 $err.Visibility = "Visible"
@@ -9363,9 +9368,9 @@ function Show-LicenseWindow {
             # Save cache
             try {
                 $cache = @{
-                    key = $key
-                    keyHash = (Get-SHA256 $key)
-                    hwid = $hwid
+                    key = $capturedKey
+                    keyHash = (Get-SHA256 $capturedKey)
+                    hwid = $capturedHwid
                     expiresAt = $r.entry.expiresAt
                     discordId = [string]$r.entry.discordId
                     permanent = [bool]$r.entry.permanent
@@ -9378,7 +9383,7 @@ function Show-LicenseWindow {
                 $btnA.IsEnabled = $true; $btnA.Content = "AKTIVIRAJ"
                 return
             }
-            $script:CurrentLicenseKey = $key
+            $script:CurrentLicenseKey = $capturedKey
             $okt.Text = "Licenca aktivirana. Pokrecem launcher..."
             $okt.Visibility = "Visible"
             $licWin.Tag = "ok"
@@ -9386,9 +9391,11 @@ function Show-LicenseWindow {
             $tmr.Interval = [TimeSpan]::FromMilliseconds(700)
             $tmr.Add_Tick({ $tmr.Stop(); try { $licWin.Close() } catch {} }.GetNewClosure())
             $tmr.Start()
-        }) | Out-Null
+        }).GetNewClosure()) | Out-Null
     })
     $licWin.ShowDialog() | Out-Null
+    # Vrati splash ako je licenca uspjesna (nastavlja loading)
+    try { if ($script:SplashWindow -and $licWin.Tag -eq "ok") { $script:SplashWindow.Show() } } catch {}
     return $licWin.Tag
 }
 
