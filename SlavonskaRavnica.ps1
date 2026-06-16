@@ -1364,6 +1364,37 @@ function Get-ModThumbnailCachePath {
     } catch { return $null }
 }
 
+function Decode-DXT1Block {
+    # Dekodira jedan 4x4 DXT1 blok (8 bajtova) u RGBA piksele
+    param([byte[]]$Bytes, [int]$Pos, [byte[]]$Rgba, [int]$W, [int]$H, [int]$BX, [int]$BY)
+    $c0 = [BitConverter]::ToUInt16($Bytes, $Pos)
+    $c1 = [BitConverter]::ToUInt16($Bytes, $Pos + 2)
+    $bits = [BitConverter]::ToUInt32($Bytes, $Pos + 4)
+    $pal = New-Object uint32[] 4
+    $pal[0] = Convert-Rgb565ToArgb $c0 255
+    $pal[1] = Convert-Rgb565ToArgb $c1 255
+    if ($c0 -gt $c1) {
+        $pal[2] = Convert-Rgb565ToArgb ([uint16]([int]($c0 * 2 + $c1) / 3)) 255
+        $pal[3] = Convert-Rgb565ToArgb ([uint16]([int]($c0 + $c1 * 2) / 3)) 255
+    } else {
+        $pal[2] = Convert-Rgb565ToArgb ([uint16](([int]$c0 + [int]$c1) / 2)) 255
+        $pal[3] = 0
+    }
+    for ($py = 0; $py -lt 4; $py++) {
+        for ($px = 0; $px -lt 4; $px++) {
+            $x = $BX * 4 + $px; $y = $BY * 4 + $py
+            if ($x -ge $W -or $y -ge $H) { continue }
+            $idx = [int](($bits -shr (2 * ($py * 4 + $px))) -band 3)
+            $c = $pal[$idx]
+            $o = ($y * $W + $x) * 4
+            $Rgba[$o]     = [byte]($c -band 0xFF)
+            $Rgba[$o + 1] = [byte](($c -shr 8) -band 0xFF)
+            $Rgba[$o + 2] = [byte](($c -shr 16) -band 0xFF)
+            $Rgba[$o + 3] = [byte](($c -shr 24) -band 0xFF)
+        }
+    }
+}
+
 function Convert-DdsBytesToPngFile {
     param([byte[]]$Bytes, [string]$OutPath)
     if (-not $Bytes -or $Bytes.Length -lt 128) { return $false }
@@ -1374,40 +1405,101 @@ function Convert-DdsBytesToPngFile {
         if ($w -le 0 -or $h -le 0 -or $w -gt 2048 -or $h -gt 2048) { return $false }
         $pf = [BitConverter]::ToUInt32($Bytes, 84)
         $dataOff = 128
+        # DX10 extended header — dodaje 20 bajtova iza standardnog headera
+        if ($pf -eq 0x30315844) {
+            if ($Bytes.Length -lt 148) { return $false }
+            $dxgiFormat = [BitConverter]::ToUInt32($Bytes, 128)
+            $dataOff = 148
+            # Mapiraj DXGI format na interni codec
+            if ($dxgiFormat -eq 71 -or $dxgiFormat -eq 72) { $pf = 0x31545844 }      # BC1 = DXT1
+            elseif ($dxgiFormat -eq 74 -or $dxgiFormat -eq 75) { $pf = 0x33545844 }  # BC2 = DXT3
+            elseif ($dxgiFormat -eq 77 -or $dxgiFormat -eq 78) { $pf = 0x35545844 }  # BC3 = DXT5
+            elseif ($dxgiFormat -eq 98 -or $dxgiFormat -eq 99) { $pf = 0xBC7 }       # BC7
+            else { return $false }
+        }
         if ($Bytes.Length -lt ($dataOff + 8)) { return $false }
         $rgba = New-Object byte[] ($w * $h * 4)
+        $blocksX = [Math]::Max(1, [int][Math]::Ceiling($w / 4.0))
+        $blocksY = [Math]::Max(1, [int][Math]::Ceiling($h / 4.0))
         if ($pf -eq 0x31545844) {
-            # DXT1
-            $blocksX = [Math]::Max(1, [int][Math]::Ceiling($w / 4.0))
-            $blocksY = [Math]::Max(1, [int][Math]::Ceiling($h / 4.0))
+            # DXT1 (BC1) — 8 bajtova po bloku
             $pos = $dataOff
             for ($by = 0; $by -lt $blocksY; $by++) {
                 for ($bx = 0; $bx -lt $blocksX; $bx++) {
                     if ($pos + 8 -gt $Bytes.Length) { return $false }
-                    $c0 = [BitConverter]::ToUInt16($Bytes, $pos); $pos += 2
-                    $c1 = [BitConverter]::ToUInt16($Bytes, $pos); $pos += 2
-                    $bits = [BitConverter]::ToUInt32($Bytes, $pos); $pos += 4
-                    $pal = New-Object uint32[] 4
-                    $pal[0] = Convert-Rgb565ToArgb $c0 255
-                    $pal[1] = Convert-Rgb565ToArgb $c1 255
-                    $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255
-                    $pal[3] = 0
-                    if ($c0 -le $c1) { $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255; $pal[3] = 0 }
+                    Decode-DXT1Block -Bytes $Bytes -Pos $pos -Rgba $rgba -W $w -H $h -BX $bx -BY $by
+                    $pos += 8
+                }
+            }
+        } elseif ($pf -eq 0x33545844) {
+            # DXT3 (BC2) — 16 bajtova po bloku (8 alpha + 8 color)
+            $pos = $dataOff
+            for ($by = 0; $by -lt $blocksY; $by++) {
+                for ($bx = 0; $bx -lt $blocksX; $bx++) {
+                    if ($pos + 16 -gt $Bytes.Length) { return $false }
+                    # Alpha blok: 8 bajtova = 16 piksela x 4 bita
+                    $alphaBlock = New-Object byte[] 16
+                    for ($i = 0; $i -lt 8; $i++) {
+                        $ab = $Bytes[$pos + $i]
+                        $alphaBlock[$i * 2]     = [byte](($ab -band 0x0F) * 17)
+                        $alphaBlock[$i * 2 + 1] = [byte]((($ab -shr 4) -band 0x0F) * 17)
+                    }
+                    # Color blok (isti kao DXT1 ali bez 1-bit alpha)
+                    Decode-DXT1Block -Bytes $Bytes -Pos ($pos + 8) -Rgba $rgba -W $w -H $h -BX $bx -BY $by
+                    # Primijeni eksplicitnu alphu
                     for ($py = 0; $py -lt 4; $py++) {
                         for ($px = 0; $px -lt 4; $px++) {
                             $x = $bx * 4 + $px; $y = $by * 4 + $py
                             if ($x -ge $w -or $y -ge $h) { continue }
-                            $idx = [int](($bits -shr (2 * ($py * 4 + $px))) -band 3)
-                            $c = $pal[$idx]
-                            $o = ($y * $w + $x) * 4
-                            $rgba[$o]     = [byte]($c -band 0xFF)
-                            $rgba[$o + 1] = [byte](($c -shr 8) -band 0xFF)
-                            $rgba[$o + 2] = [byte](($c -shr 16) -band 0xFF)
-                            $rgba[$o + 3] = if ($idx -eq 3 -and $c0 -gt $c1) { 0 } else { 255 }
+                            $o = ($y * $w + $x) * 4 + 3
+                            $Rgba[$o] = $alphaBlock[$py * 4 + $px]
                         }
                     }
+                    $pos += 16
                 }
             }
+        } elseif ($pf -eq 0x35545844) {
+            # DXT5 (BC3) — 16 bajtova po bloku (8 alpha interpolated + 8 color)
+            $pos = $dataOff
+            for ($by = 0; $by -lt $blocksY; $by++) {
+                for ($bx = 0; $bx -lt $blocksX; $bx++) {
+                    if ($pos + 16 -gt $Bytes.Length) { return $false }
+                    # Alpha blok: 2 referentne vrijednosti + 6 bajtova 3-bitnih indeksa
+                    $a0 = [int]$Bytes[$pos]; $a1 = [int]$Bytes[$pos + 1]
+                    # Citaj 48 bita (6 bajtova) za alpha indekse
+                    $alphaBits = [uint64]0
+                    for ($i = 0; $i -lt 6; $i++) {
+                        $alphaBits = $alphaBits -bor ([uint64]$Bytes[$pos + 2 + $i] -shl ($i * 8))
+                    }
+                    # Izracunaj alpha paletu (8 vrijednosti)
+                    $aPal = New-Object int[] 8
+                    $aPal[0] = $a0; $aPal[1] = $a1
+                    if ($a0 -gt $a1) {
+                        for ($i = 1; $i -le 6; $i++) { $aPal[$i + 1] = [int](((6 - $i) * $a0 + $i * $a1 + 3) / 7) }
+                    } else {
+                        for ($i = 1; $i -le 4; $i++) { $aPal[$i + 1] = [int](((4 - $i) * $a0 + $i * $a1 + 2) / 5) }
+                        $aPal[6] = 0; $aPal[7] = 255
+                    }
+                    # Color blok
+                    Decode-DXT1Block -Bytes $Bytes -Pos ($pos + 8) -Rgba $rgba -W $w -H $h -BX $bx -BY $by
+                    # Primijeni interpoliranu alphu
+                    for ($py = 0; $py -lt 4; $py++) {
+                        for ($px = 0; $px -lt 4; $px++) {
+                            $x = $bx * 4 + $px; $y = $by * 4 + $py
+                            if ($x -ge $w -or $y -ge $h) { continue }
+                            $pixIdx = $py * 4 + $px
+                            $aIdx = [int](($alphaBits -shr ($pixIdx * 3)) -band 7)
+                            $o = ($y * $w + $x) * 4 + 3
+                            $Rgba[$o] = [byte]$aPal[$aIdx]
+                        }
+                    }
+                    $pos += 16
+                }
+            }
+        } elseif ($pf -eq 0xBC7) {
+            # BC7 — kompleksan format, fallback: citaj samo prva 2 bita po bloku za boje
+            # BC7 je pretezak za PS dekoder; vrati false i koristi fallback icon
+            return $false
         } elseif ($pf -eq 0x20534444) {
             # Uncompressed 32-bit (rare)
             $need = $dataOff + ($w * $h * 4)
@@ -1572,7 +1664,8 @@ function Start-ModThumbnailLoads {
     $script:ThumbTimer = New-Object System.Windows.Threading.DispatcherTimer
     $script:ThumbTimer.Interval = [TimeSpan]::FromMilliseconds(80)
     $script:ThumbTimer.Add_Tick({
-        $batch = 2
+        $batch = 5
+        $changed = $false
         while ($batch -gt 0 -and $script:ThumbQueue.Count -gt 0) {
             $batch--
             $it = $script:ThumbQueue.Dequeue()
@@ -1583,11 +1676,14 @@ function Start-ModThumbnailLoads {
                     if ($img) {
                         $it.ThumbSource = $img
                         $it.HasThumb = $true
+                        $changed = $true
                     }
                 }
             } catch {}
             $it.ThumbLoading = $false
         }
+        # Osvjezi WPF binding — PSCustomObject nema INotifyPropertyChanged
+        if ($changed -and $lstMods) { try { $lstMods.Items.Refresh() } catch {} }
         if ($script:ThumbQueue.Count -eq 0) { $script:ThumbTimer.Stop() }
     })
     $script:ThumbTimer.Start()
@@ -4852,19 +4948,13 @@ $script:PreloadedLocalModCount = $null
                                     <Button x:Name="btnRefreshMods" Content="Osvjezi"
                                             Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
                                             ToolTip="Provjeri server modove i usporedi sa lokalnim"/>
-                                    <Button x:Name="btnRescanMods" Content="Ponovno skeniraj"
-                                            Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
-                                            ToolTip="Prisilno osvjezi manifest sa servera (bot ili mods.html)"/>
-                                    <Button x:Name="btnDownloadMissing" Content="Skini Sve Sto Fali"
+                                    <Button x:Name="btnDownloadMissing" Content="Preuzmi sto fali"
                                             Style="{StaticResource BtnPrimary}" Margin="0,0,8,0"
                                             ToolTip="Skini sve mod-ove sa statusom FALI ili ZASTARIO"/>
-                                    <Border Width="1" Background="#2a2a2a" Margin="4,2,12,2"/>
-                                    <Button x:Name="btnDeleteMod" Content="Obrisi"
-                                            Style="{StaticResource BtnDanger}" Margin="0,0,8,0"
-                                            ToolTip="Obrisi oznaceni lokalni mod (Recycle Bin)"/>
-                                    <Button x:Name="btnOpenModsFolder" Content="Otvori Folder"
-                                            Style="{StaticResource BtnGhost}"
-                                            ToolTip="Otvori mods folder u Windows Exploreru"/>
+                                    <!-- Skriveni za kompatibilnost s kodom -->
+                                    <Button x:Name="btnRescanMods" Visibility="Collapsed"/>
+                                    <Button x:Name="btnDeleteMod" Visibility="Collapsed"/>
+                                    <Button x:Name="btnOpenModsFolder" Visibility="Collapsed"/>
                                 </StackPanel>
                                 <Grid Grid.Row="0" Grid.Column="1" Width="280" VerticalAlignment="Center">
                                     <TextBox x:Name="txtModSearch" Style="{StaticResource DarkInput}"
