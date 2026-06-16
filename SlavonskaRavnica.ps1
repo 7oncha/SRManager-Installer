@@ -1603,18 +1603,35 @@ function Get-ModThumbnailFromZip {
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue | Out-Null
         $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
         try {
+            # 1. Pokusaj iz modDesc.xml → icon putanja
             $desc = Get-ModDescEntryFromZip -Zip $zip
-            if (-not $desc) { return $null }
-            $sr = New-Object System.IO.StreamReader($desc.Open())
-            try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
-            $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
-            $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
-            if ($iconEntry -and (Export-ModIconEntryToPng -Entry $iconEntry -OutPath $cache)) { return $cache }
-            # Fallback: trazi bilo koju PNG/JPG sliku u ZIP-u (BC7 DDS ne mozemo dekodirati)
+            if ($desc) {
+                $sr = New-Object System.IO.StreamReader($desc.Open())
+                try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
+                $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
+                $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
+                if ($iconEntry -and (Export-ModIconEntryToPng -Entry $iconEntry -OutPath $cache)) { return $cache }
+            }
+            # 2. Fallback: trazi poznate icon nazive (store_icon, icon, store)
+            $knownNames = @('icon.png','icon.jpg','store_icon.png','store.png','icon_store.png','thumbnail.png','thumb.png')
+            foreach ($kn in $knownNames) {
+                $found = $zip.Entries | Where-Object { $_.FullName -like "*/$kn" -or $_.Name -eq $kn } | Select-Object -First 1
+                if ($found -and $found.Length -gt 100) {
+                    if (Export-ModIconEntryToPng -Entry $found -OutPath $cache) { return $cache }
+                }
+            }
+            # 3. Fallback: bilo koja PNG/JPG slika u ZIP-u
             foreach ($e in $zip.Entries) {
                 if ($e.Length -lt 100) { continue }
                 $fn = $e.FullName
                 if ($fn -match '\.(png|jpg|jpeg)$' -and $fn -notmatch '(?i)(readme|doc|license|__MACOSX)') {
+                    if (Export-ModIconEntryToPng -Entry $e -OutPath $cache) { return $cache }
+                }
+            }
+            # 4. Fallback: bilo koji ne-BC7 DDS (DXT1/DXT3/DXT5 mozemo dekodirati)
+            foreach ($e in $zip.Entries) {
+                if ($e.Length -lt 128) { continue }
+                if ($e.FullName -match '\.dds$') {
                     if (Export-ModIconEntryToPng -Entry $e -OutPath $cache) { return $cache }
                 }
             }
@@ -3866,10 +3883,17 @@ $script:PreloadedLocalModCount = $null
                                 <Setter TargetName="bd" Property="Background" Value="#F5C518"/>
                                 <Setter Property="Foreground" Value="#111"/>
                                 <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#F5C518"/>
+                                <Setter TargetName="bd" Property="Effect">
+                                    <Setter.Value>
+                                        <DropShadowEffect Color="#F5C518" BlurRadius="10" ShadowDepth="0" Opacity="0.5"/>
+                                    </Setter.Value>
+                                </Setter>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="bd" Property="Background" Value="#1a1a1a"/>
                                 <Setter TargetName="bd" Property="BorderBrush" Value="#F5C518"/>
+                                <Setter Property="Foreground" Value="#ddd"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -4151,14 +4175,26 @@ $script:PreloadedLocalModCount = $null
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="Foreground" Value="#bbb"/>
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Width" Value="34"/>
-            <Setter Property="Height" Value="34"/>
+            <Setter Property="Width" Value="36"/>
+            <Setter Property="Height" Value="36"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="bd" Background="{TemplateBinding Background}"
-                                CornerRadius="17" BorderBrush="#2a2a2a" BorderThickness="1">
+                        <Border x:Name="bd" CornerRadius="18">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop x:Name="bg0" Color="#181818" Offset="0"/>
+                                    <GradientStop x:Name="bg1" Color="#111111" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Border.BorderBrush>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop x:Name="br0" Color="#2a2a2a" Offset="0"/>
+                                    <GradientStop x:Name="br1" Color="#1a1a1a" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.BorderBrush>
+                            <Border.BorderThickness>1</Border.BorderThickness>
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                                               TextElement.FontFamily="{TemplateBinding FontFamily}"
                                               TextElement.FontSize="{TemplateBinding FontSize}"
@@ -4166,12 +4202,20 @@ $script:PreloadedLocalModCount = $null
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#1f1a0a"/>
-                                <Setter TargetName="bd" Property="BorderBrush" Value="#F5C518"/>
+                                <Setter TargetName="bg0" Property="Color" Value="#251e08"/>
+                                <Setter TargetName="bg1" Property="Color" Value="#1a1508"/>
+                                <Setter TargetName="br0" Property="Color" Value="#F5C518"/>
+                                <Setter TargetName="br1" Property="Color" Value="#8a6e0a"/>
                                 <Setter Property="Foreground" Value="#F5C518"/>
+                                <Setter TargetName="bd" Property="Effect">
+                                    <Setter.Value>
+                                        <DropShadowEffect Color="#F5C518" BlurRadius="12" ShadowDepth="0" Opacity="0.4"/>
+                                    </Setter.Value>
+                                </Setter>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#2a2410"/>
+                                <Setter TargetName="bg0" Property="Color" Value="#2a2410"/>
+                                <Setter TargetName="bg1" Property="Color" Value="#1f1a0a"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -4301,17 +4345,42 @@ $script:PreloadedLocalModCount = $null
                                 Content="&#xE8BD;" ToolTip="Otvori Discord server"/>
                         <Button x:Name="btnUpdateNotify" Content="Nova verzija!" Visibility="Collapsed"
                                 Style="{StaticResource BtnUpdate}" Margin="0,0,12,0"/>
-                        <Border x:Name="licenseBadge" Visibility="Collapsed" CornerRadius="4"
-                                Background="#13301f" BorderBrush="#30A46C" BorderThickness="1"
-                                Padding="8,3" Margin="0,0,10,0" VerticalAlignment="Center"
+                        <Border x:Name="licenseBadge" Visibility="Collapsed" CornerRadius="6"
+                                Padding="10,4" Margin="0,0,10,0" VerticalAlignment="Center"
                                 ToolTip="Licenca aktivirana na ovom racunalu">
-                            <TextBlock x:Name="txtLicenseBadge" Text="LICENCA" FontSize="9"
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="#0d2a18" Offset="0"/>
+                                    <GradientStop Color="#132a1f" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Border.BorderBrush>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="#30A46C" Offset="0"/>
+                                    <GradientStop Color="#1a6b42" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.BorderBrush>
+                            <Border.BorderThickness>1</Border.BorderThickness>
+                            <Border.Effect>
+                                <DropShadowEffect Color="#30A46C" BlurRadius="10" ShadowDepth="0" Opacity="0.3"/>
+                            </Border.Effect>
+                            <TextBlock x:Name="txtLicenseBadge" Text="LICENCA OK" FontSize="9"
                                        FontWeight="Bold" Foreground="#30A46C" FontFamily="Segoe UI"/>
                         </Border>
-                        <Ellipse x:Name="statusDot" Width="8" Height="8" Fill="#E5484D" Margin="0,0,6,0"/>
-                        <TextBlock x:Name="txtStatus" Text="OFFLINE" FontSize="10"
-                                   FontWeight="Bold" Foreground="#E5484D" Margin="0,0,16,0"
-                                   VerticalAlignment="Center" FontFamily="Segoe UI"/>
+                        <Border CornerRadius="6" Padding="8,4" Margin="0,0,16,0" VerticalAlignment="Center">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="#0d1a0d" Offset="0"/>
+                                    <GradientStop Color="#111" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse x:Name="statusDot" Width="8" Height="8" Fill="#E5484D" Margin="0,0,6,0"/>
+                                <TextBlock x:Name="txtStatus" Text="OFFLINE" FontSize="10"
+                                           FontWeight="Bold" Foreground="#E5484D"
+                                           VerticalAlignment="Center" FontFamily="Segoe UI"/>
+                            </StackPanel>
+                        </Border>
                         <Button x:Name="btnFullscreen" Style="{StaticResource IconBtn}" Margin="0,0,4,0"
                                 Content="&#xE740;" FontSize="12" ToolTip="Cijeli zaslon (F11)"/>
                         <Button x:Name="btnMinimize" Style="{StaticResource IconBtn}" Margin="0,0,4,0"
@@ -4330,13 +4399,21 @@ $script:PreloadedLocalModCount = $null
                 </Grid.ColumnDefinitions>
 
                 <!-- SIDEBAR -->
-                <Border Grid.Column="0" BorderBrush="#1a1a1a" BorderThickness="0,0,1,0">
+                <Border Grid.Column="0" BorderThickness="0,0,1,0">
                     <Border.Background>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#101010" Offset="0"/>
-                            <GradientStop Color="#0a0a0a" Offset="1"/>
+                            <GradientStop Color="#111111" Offset="0"/>
+                            <GradientStop Color="#0c0c0c" Offset="0.5"/>
+                            <GradientStop Color="#080808" Offset="1"/>
                         </LinearGradientBrush>
                     </Border.Background>
+                    <Border.BorderBrush>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#2a2210" Offset="0"/>
+                            <GradientStop Color="#1a1a1a" Offset="0.4"/>
+                            <GradientStop Color="#111" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.BorderBrush>
                     <DockPanel>
                         <!-- Server Selector -->
                         <StackPanel DockPanel.Dock="Top" Margin="8,12,8,0">
@@ -4952,42 +5029,110 @@ $script:PreloadedLocalModCount = $null
                             </StackPanel>
                         </Grid>
 
-                        <!-- Stat strip -->
+                        <!-- Stat strip sa gradient karticama -->
                         <UniformGrid Grid.Row="1" Columns="4" Margin="0,0,0,16">
-                            <Border Margin="0,0,6,0" Style="{StaticResource SrCard}" Padding="16,12" MinHeight="80">
+                            <Border Margin="0,0,6,0" CornerRadius="10" Padding="16,14" MinHeight="80"
+                                    BorderThickness="1">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#181510" Offset="0"/>
+                                        <GradientStop Color="#111111" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Border.BorderBrush>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#3a2e10" Offset="0"/>
+                                        <GradientStop Color="#1f1f1f" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.BorderBrush>
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="LOKALNO" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
-                                    <TextBlock x:Name="txtModsLocal" Text="-" FontSize="24"
+                                    <TextBlock Text="&#x1F4C2; LOKALNO" FontSize="10" Foreground="#888"
+                                               FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="txtModsLocal" Text="-" FontSize="26"
                                                FontWeight="Bold" Foreground="{StaticResource Gold}" FontFamily="Segoe UI"/>
                                 </StackPanel>
                             </Border>
-                            <Border Margin="3,0,3,0" Style="{StaticResource SrCard}" Padding="16,12" MinHeight="80">
+                            <Border Margin="3,0,3,0" CornerRadius="10" Padding="16,14" MinHeight="80"
+                                    BorderThickness="1">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#101418" Offset="0"/>
+                                        <GradientStop Color="#111111" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Border.BorderBrush>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#10304a" Offset="0"/>
+                                        <GradientStop Color="#1f1f1f" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.BorderBrush>
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="SERVER" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
-                                    <TextBlock x:Name="txtModsServer" Text="-" FontSize="24"
-                                               FontWeight="Bold" Foreground="{StaticResource Gold}" FontFamily="Segoe UI"/>
+                                    <TextBlock Text="&#x2601; SERVER" FontSize="10" Foreground="#888"
+                                               FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="txtModsServer" Text="-" FontSize="26"
+                                               FontWeight="Bold" Foreground="#4EA8DE" FontFamily="Segoe UI"/>
                                 </StackPanel>
                             </Border>
-                            <Border Margin="3,0,3,0" Style="{StaticResource SrCard}" Padding="16,12" MinHeight="80">
+                            <Border Margin="3,0,3,0" CornerRadius="10" Padding="16,14" MinHeight="80"
+                                    BorderThickness="1">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#1a1010" Offset="0"/>
+                                        <GradientStop Color="#111111" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Border.BorderBrush>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#4a1010" Offset="0"/>
+                                        <GradientStop Color="#1f1f1f" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.BorderBrush>
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="FALI / ZASTARJELO" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
-                                    <TextBlock x:Name="txtModsMissing" Text="-" FontSize="24"
+                                    <TextBlock Text="&#x26A0; FALI" FontSize="10" Foreground="#888"
+                                               FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="txtModsMissing" Text="-" FontSize="26"
                                                FontWeight="Bold" Foreground="{StaticResource DangerRed}" FontFamily="Segoe UI"/>
                                 </StackPanel>
                             </Border>
-                            <Border Margin="6,0,0,0" Style="{StaticResource SrCard}" Padding="16,12" MinHeight="80">
+                            <Border Margin="6,0,0,0" CornerRadius="10" Padding="16,14" MinHeight="80"
+                                    BorderThickness="1">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#141018" Offset="0"/>
+                                        <GradientStop Color="#111111" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Border.BorderBrush>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#2a1a4a" Offset="0"/>
+                                        <GradientStop Color="#1f1f1f" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.BorderBrush>
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="VIDLJIVO" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
-                                    <TextBlock x:Name="txtModsVisible" Text="-" FontSize="24"
+                                    <TextBlock Text="&#x1F441; VIDLJIVO" FontSize="10" Foreground="#888"
+                                               FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="txtModsVisible" Text="-" FontSize="26"
                                                FontWeight="Bold" Foreground="#9d8df5" FontFamily="Segoe UI"/>
                                 </StackPanel>
                             </Border>
                         </UniformGrid>
 
                         <!-- Toolbar (akcije + search + filteri u jednom blocku) -->
-                        <Border Grid.Row="2" Background="#121212" CornerRadius="8"
+                        <Border Grid.Row="2" CornerRadius="10"
                                 Padding="16,14" Margin="0,0,0,12"
-                                BorderBrush="{StaticResource CardBorder}" BorderThickness="1">
+                                BorderThickness="1">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#141414" Offset="0"/>
+                                    <GradientStop Color="#0e0e0e" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Border.BorderBrush>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="#2a2210" Offset="0"/>
+                                    <GradientStop Color="#1a1a1a" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
@@ -5044,8 +5189,24 @@ $script:PreloadedLocalModCount = $null
                             </Grid>
                         </Border>
 
-                        <Border Grid.Row="3" Background="#0e0e0e" CornerRadius="8"
-                                BorderBrush="{StaticResource CardBorder}" BorderThickness="1" Padding="12">
+                        <Border x:Name="modListGlowBorder" Grid.Row="3" CornerRadius="10"
+                                BorderThickness="1" Padding="12">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#0e0e0e" Offset="0"/>
+                                    <GradientStop Color="#0a0a0a" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Border.BorderBrush>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#3a2e10" Offset="0"/>
+                                    <GradientStop Color="#1a1a1a" Offset="0.5"/>
+                                    <GradientStop Color="#3a2e10" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.BorderBrush>
+                            <Border.Effect>
+                                <DropShadowEffect x:Name="modListGlow" Color="#F5C518" BlurRadius="0" ShadowDepth="0" Opacity="0"/>
+                            </Border.Effect>
                                 <ListBox x:Name="lstMods" Background="Transparent" Foreground="#ddd"
                                          BorderThickness="0" FontFamily="Segoe UI"
                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -5458,10 +5619,25 @@ $script:PreloadedLocalModCount = $null
                                         VerticalAlignment="Top" Padding="16,8"/>
                             </Grid>
 
-                            <Border Background="#161616" CornerRadius="10" Padding="20"
-                                    Margin="0,0,0,14" BorderBrush="#3a2e10" BorderThickness="1">
+                            <Border CornerRadius="10" Padding="20"
+                                    Margin="0,0,0,14" BorderThickness="1">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#181510" Offset="0"/>
+                                        <GradientStop Color="#111111" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Border.BorderBrush>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#3a2e10" Offset="0"/>
+                                        <GradientStop Color="#1f1f1f" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.BorderBrush>
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#F5C518" BlurRadius="8" ShadowDepth="0" Opacity="0.15"/>
+                                </Border.Effect>
                                 <StackPanel>
-                                    <TextBlock Text="Brzi odabir foldera" FontSize="15" FontWeight="SemiBold"
+                                    <TextBlock Text="&#x1F4C1; Brzi odabir foldera" FontSize="15" FontWeight="SemiBold"
                                                Foreground="#F5C518" FontFamily="Segoe UI" Margin="0,0,0,10"/>
                                     <ComboBox x:Name="cmbMpFolderSelect"
                                               Style="{StaticResource DarkComboBox}"/>
@@ -5486,8 +5662,20 @@ $script:PreloadedLocalModCount = $null
                                         Margin="0,0,8,8" Padding="14,10"/>
                             </WrapPanel>
 
-                            <Border Background="#161616" CornerRadius="10" Padding="16"
-                                    Margin="0,0,0,14" BorderBrush="#222" BorderThickness="1">
+                            <Border CornerRadius="10" Padding="16"
+                                    Margin="0,0,0,14" BorderThickness="1">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#131313" Offset="0"/>
+                                        <GradientStop Color="#0e0e0e" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Border.BorderBrush>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#2a2a2a" Offset="0"/>
+                                        <GradientStop Color="#1a1a1a" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.BorderBrush>
                                 <StackPanel>
                                     <TextBlock Text="Folderi (JSON)" FontSize="13" FontWeight="SemiBold"
                                                Foreground="#ccc" FontFamily="Segoe UI" Margin="0,0,0,8"/>
@@ -5504,12 +5692,24 @@ $script:PreloadedLocalModCount = $null
                                 </StackPanel>
                             </Border>
 
-                            <Border Background="#161616" CornerRadius="10" Padding="20"
-                                    Margin="0,0,0,14" BorderBrush="#222" BorderThickness="1">
+                            <Border CornerRadius="10" Padding="20"
+                                    Margin="0,0,0,14" BorderThickness="1">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#101418" Offset="0"/>
+                                        <GradientStop Color="#111111" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Border.BorderBrush>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#10304a" Offset="0"/>
+                                        <GradientStop Color="#1f1f1f" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.BorderBrush>
                                 <StackPanel>
                                     <Grid Margin="0,0,0,10">
-                                        <TextBlock Text="Mod profili (po serveru)" FontSize="15" FontWeight="SemiBold"
-                                                   Foreground="#F5C518" FontFamily="Segoe UI"/>
+                                        <TextBlock Text="&#x1F3AE; Mod profili (po serveru)" FontSize="15" FontWeight="SemiBold"
+                                                   Foreground="#4EA8DE" FontFamily="Segoe UI"/>
                                         <Button x:Name="btnRefreshModProfiles" Content="Osvjezi"
                                                 Style="{StaticResource BtnGhost}" HorizontalAlignment="Right"
                                                 VerticalAlignment="Center" Padding="16,8"/>
@@ -5524,11 +5724,23 @@ $script:PreloadedLocalModCount = $null
                                 </StackPanel>
                             </Border>
 
-                            <Border Background="#111" CornerRadius="10" Padding="20"
-                                    BorderBrush="#222" BorderThickness="1" MinHeight="160">
+                            <Border CornerRadius="10" Padding="20"
+                                    BorderThickness="1" MinHeight="160">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#121212" Offset="0"/>
+                                        <GradientStop Color="#0d0d0d" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Border.BorderBrush>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#2a2a2a" Offset="0"/>
+                                        <GradientStop Color="#1a1a1a" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.BorderBrush>
                                 <StackPanel>
                                     <Grid Margin="0,0,0,10">
-                                        <TextBlock Text="U ovom folderu" FontSize="15" FontWeight="SemiBold"
+                                        <TextBlock Text="&#x1F4E6; U ovom folderu" FontSize="15" FontWeight="SemiBold"
                                                    Foreground="#F5C518" FontFamily="Segoe UI"/>
                                         <TextBlock x:Name="txtMpInFolderCount" Text="0 modova"
                                                    HorizontalAlignment="Right" FontSize="11"
@@ -6369,6 +6581,7 @@ $txtWizSummary       = $window.FindName("txtWizSummary")
 $btnWizBack          = $window.FindName("btnWizBack")
 $btnWizNext          = $window.FindName("btnWizNext")
 $txtWizardSubtitle   = $window.FindName("txtWizardSubtitle")
+$modListGlowBorder   = $window.FindName("modListGlowBorder")
 $filterAll           = $window.FindName("filterAll")
 $filterServer        = $window.FindName("filterServer")
 $filterMissing       = $window.FindName("filterMissing")
@@ -6467,6 +6680,28 @@ $window.Add_PreviewKeyDown({
     }
 })
 $btnClose.Add_Click({ $window.Close() })
+
+# ============================================================
+# ANIMIRANI GLOW EFEKT oko mod liste (pulsirajuce svijetlo)
+# ============================================================
+if ($modListGlowBorder) {
+    $script:GlowPhase = 0.0
+    $glowTimer = New-Object System.Windows.Threading.DispatcherTimer
+    $glowTimer.Interval = [TimeSpan]::FromMilliseconds(50)
+    $glowTimer.Add_Tick({
+        $script:GlowPhase += 0.06
+        if ($script:GlowPhase -gt [Math]::PI * 2) { $script:GlowPhase -= [Math]::PI * 2 }
+        $val = ([Math]::Sin($script:GlowPhase) + 1) / 2
+        $blur = 6 + ($val * 14)
+        $opacity = 0.15 + ($val * 0.35)
+        $fx = $modListGlowBorder.Effect
+        if ($fx) {
+            $fx.BlurRadius = $blur
+            $fx.Opacity = $opacity
+        }
+    })
+    $glowTimer.Start()
+}
 
 # ============================================================
 # NAVIGATION
