@@ -1609,8 +1609,15 @@ function Get-ModThumbnailFromZip {
             try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
             $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
             $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
-            if (-not $iconEntry) { return $null }
-            if (Export-ModIconEntryToPng -Entry $iconEntry -OutPath $cache) { return $cache }
+            if ($iconEntry -and (Export-ModIconEntryToPng -Entry $iconEntry -OutPath $cache)) { return $cache }
+            # Fallback: trazi bilo koju PNG/JPG sliku u ZIP-u (BC7 DDS ne mozemo dekodirati)
+            foreach ($e in $zip.Entries) {
+                if ($e.Length -lt 100) { continue }
+                $fn = $e.FullName
+                if ($fn -match '\.(png|jpg|jpeg)$' -and $fn -notmatch '(?i)(readme|doc|license|__MACOSX)') {
+                    if (Export-ModIconEntryToPng -Entry $e -OutPath $cache) { return $cache }
+                }
+            }
         } finally {
             $zip.Dispose()
         }
@@ -4752,34 +4759,81 @@ $script:PreloadedLocalModCount = $null
                                 </Grid>
                             </Border>
 
-                            <!-- Compact mod stats strip -->
-                            <Border Style="{StaticResource SrCard}" Padding="16,12" Margin="0,0,0,16">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" HorizontalAlignment="Center">
-                                        <TextBlock Text="MOJI MODOVI" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                                        <TextBlock x:Name="txtMyModCount" Text="-" FontSize="22"
+                            <!-- Mod statistike — kartice -->
+                            <UniformGrid Columns="3" Margin="0,0,0,16">
+                                <Border Margin="0,0,6,0" CornerRadius="10" Padding="20,16"
+                                        BorderThickness="1">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#181510" Offset="0"/>
+                                            <GradientStop Color="#111111" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <Border.BorderBrush>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                            <GradientStop Color="#3a2e10" Offset="0"/>
+                                            <GradientStop Color="#1f1f1f" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.BorderBrush>
+                                    <StackPanel>
+                                        <TextBlock Text="&#x1F4C2; MOJI MODOVI" FontSize="10" Foreground="#888"
+                                                   FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,8"/>
+                                        <TextBlock x:Name="txtMyModCount" Text="-" FontSize="28"
                                                    FontWeight="Bold" Foreground="{StaticResource Gold}"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                                   FontFamily="Segoe UI"/>
+                                        <TextBlock Text="lokalno instalirano" FontSize="10" Foreground="#555"
+                                                   FontFamily="Segoe UI" Margin="0,4,0,0"/>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="1" HorizontalAlignment="Center">
-                                        <TextBlock Text="SERVER" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                                        <TextBlock x:Name="txtServerModCount" Text="-" FontSize="22"
-                                                   FontWeight="Bold" Foreground="{StaticResource Gold}"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                </Border>
+                                <Border Margin="3,0,3,0" CornerRadius="10" Padding="20,16"
+                                        BorderThickness="1">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#101518" Offset="0"/>
+                                            <GradientStop Color="#111111" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <Border.BorderBrush>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                            <GradientStop Color="#102e3a" Offset="0"/>
+                                            <GradientStop Color="#1f1f1f" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.BorderBrush>
+                                    <StackPanel>
+                                        <TextBlock Text="&#x2601; SERVER" FontSize="10" Foreground="#888"
+                                                   FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,8"/>
+                                        <TextBlock x:Name="txtServerModCount" Text="-" FontSize="28"
+                                                   FontWeight="Bold" Foreground="#70b8ff"
+                                                   FontFamily="Segoe UI"/>
+                                        <TextBlock Text="na serveru potrebno" FontSize="10" Foreground="#555"
+                                                   FontFamily="Segoe UI" Margin="0,4,0,0"/>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="2" HorizontalAlignment="Center">
-                                        <TextBlock Text="FALI TI" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                                        <TextBlock x:Name="txtMissingCount" Text="-" FontSize="22"
+                                </Border>
+                                <Border Margin="6,0,0,0" CornerRadius="10" Padding="20,16"
+                                        BorderThickness="1">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#181010" Offset="0"/>
+                                            <GradientStop Color="#111111" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <Border.BorderBrush>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                            <GradientStop Color="#3a1010" Offset="0"/>
+                                            <GradientStop Color="#1f1f1f" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.BorderBrush>
+                                    <StackPanel>
+                                        <TextBlock Text="&#x26A0; FALI TI" FontSize="10" Foreground="#888"
+                                                   FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,8"/>
+                                        <TextBlock x:Name="txtMissingCount" Text="-" FontSize="28"
                                                    FontWeight="Bold" Foreground="{StaticResource DangerRed}"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                                   FontFamily="Segoe UI"/>
+                                        <TextBlock Text="treba skinuti" FontSize="10" Foreground="#555"
+                                                   FontFamily="Segoe UI" Margin="0,4,0,0"/>
                                     </StackPanel>
-                                </Grid>
-                            </Border>
+                                </Border>
+                            </UniformGrid>
                             <!-- Skriveni elementi za kompatibilnost s kodom -->
                             <TextBlock x:Name="txtModSizeTotal" Visibility="Collapsed"/>
 
@@ -4992,12 +5046,11 @@ $script:PreloadedLocalModCount = $null
 
                         <Border Grid.Row="3" Background="#0e0e0e" CornerRadius="8"
                                 BorderBrush="{StaticResource CardBorder}" BorderThickness="1" Padding="12">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled">
                                 <ListBox x:Name="lstMods" Background="Transparent" Foreground="#ddd"
                                          BorderThickness="0" FontFamily="Segoe UI"
                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         ScrollViewer.CanContentScroll="False"
                                          ItemContainerStyle="{StaticResource ModCardListItem}">
                                     <ListBox.ItemsPanel>
                                         <ItemsPanelTemplate>
@@ -5172,7 +5225,6 @@ $script:PreloadedLocalModCount = $null
                                         </ContextMenu>
                                     </ListBox.ContextMenu>
                                 </ListBox>
-                            </ScrollViewer>
                         </Border>
 
                         <Border Grid.Row="4" Background="#141414" CornerRadius="8"
@@ -7375,7 +7427,11 @@ function Apply-ModFilter {
         if ($searchText) { $sub += " | pretraga: '$searchText'" }
         $txtModSubtitle.Text = $sub
     }
-    Start-ModThumbnailLoads -Items $sorted
+    # Ucitaj thumbnailove samo ako jos nisu svi ucitani
+    $needsLoad = $false
+    foreach ($s in $sorted) { if (-not $s.HasThumb -and $s.LocalZipPath) { $needsLoad = $true; break } }
+    if ($needsLoad) { Start-ModThumbnailLoads -Items $sorted }
+    elseif ($lstMods) { try { $lstMods.Items.Refresh() } catch {} }
 }
 
 # ============================================================
