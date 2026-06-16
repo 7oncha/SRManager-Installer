@@ -9360,32 +9360,36 @@ function Show-LicenseWindow {
         $key = ($txt.Text).Trim()
         if (-not $key) { $err.Text = "Unesi kljuc."; $err.Visibility = "Visible"; return }
         $btnA.IsEnabled = $false; $btnA.Content = "Provjera..."
-        # Spremi key/hwid prije BeginInvoke jer [Action] delegate ne hvata lokalne varijable
-        $capturedKey = $key
-        $capturedHwid = $hwid
-        # Defer actual HTTP call so the UI repaints with "Provjera..." first.
-        $licWin.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, ([Action]{
+        # Spremi u script scope — [Action] delegate ne vidi lokalne varijable ali vidi $script:
+        $script:_pendingKey = $key
+        $script:_pendingHwid = $hwid
+        $script:_licWin = $licWin
+        $script:_licErr = $err
+        $script:_licOkt = $okt
+        $script:_licBtnA = $btnA
+        # Defer HTTP poziv da se UI osvjezi s "Provjera..." prije poziva
+        $licWin.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [Action]{
             $r = $null
             try {
-                $r = Test-License -key $capturedKey -hwid $capturedHwid
+                $r = Test-License -key $script:_pendingKey -hwid $script:_pendingHwid
             } catch {
-                $err.Text = "Greska kod provjere: $($_.Exception.Message)"
-                $err.Visibility = "Visible"
-                $btnA.IsEnabled = $true; $btnA.Content = "AKTIVIRAJ"
+                $script:_licErr.Text = "Greska kod provjere: $($_.Exception.Message)"
+                $script:_licErr.Visibility = "Visible"
+                $script:_licBtnA.IsEnabled = $true; $script:_licBtnA.Content = "AKTIVIRAJ"
                 return
             }
             if (-not $r -or -not $r.ok) {
-                $err.Text = if ($r -and $r.reason) { [string]$r.reason } else { "Nepoznata greska." }
-                $err.Visibility = "Visible"
-                $btnA.IsEnabled = $true; $btnA.Content = "AKTIVIRAJ"
+                $script:_licErr.Text = if ($r -and $r.reason) { [string]$r.reason } else { "Nepoznata greska." }
+                $script:_licErr.Visibility = "Visible"
+                $script:_licBtnA.IsEnabled = $true; $script:_licBtnA.Content = "AKTIVIRAJ"
                 return
             }
             # Save cache
             try {
                 $cache = @{
-                    key = $capturedKey
-                    keyHash = (Get-SHA256 $capturedKey)
-                    hwid = $capturedHwid
+                    key = $script:_pendingKey
+                    keyHash = (Get-SHA256 $script:_pendingKey)
+                    hwid = $script:_pendingHwid
                     expiresAt = $r.entry.expiresAt
                     discordId = [string]$r.entry.discordId
                     permanent = [bool]$r.entry.permanent
@@ -9393,20 +9397,20 @@ function Show-LicenseWindow {
                 }
                 Save-LicenseCache $cache | Out-Null
             } catch {
-                $err.Text = "Greska kod spremanja: $($_.Exception.Message)"
-                $err.Visibility = "Visible"
-                $btnA.IsEnabled = $true; $btnA.Content = "AKTIVIRAJ"
+                $script:_licErr.Text = "Greska kod spremanja: $($_.Exception.Message)"
+                $script:_licErr.Visibility = "Visible"
+                $script:_licBtnA.IsEnabled = $true; $script:_licBtnA.Content = "AKTIVIRAJ"
                 return
             }
-            $script:CurrentLicenseKey = $capturedKey
-            $okt.Text = "Licenca aktivirana. Pokrecem launcher..."
-            $okt.Visibility = "Visible"
-            $licWin.Tag = "ok"
+            $script:CurrentLicenseKey = $script:_pendingKey
+            $script:_licOkt.Text = "Licenca aktivirana. Pokrecem launcher..."
+            $script:_licOkt.Visibility = "Visible"
+            $script:_licWin.Tag = "ok"
             $tmr = New-Object System.Windows.Threading.DispatcherTimer
             $tmr.Interval = [TimeSpan]::FromMilliseconds(700)
-            $tmr.Add_Tick({ $tmr.Stop(); try { $licWin.Close() } catch {} }.GetNewClosure())
+            $tmr.Add_Tick({ $tmr.Stop(); try { $script:_licWin.Close() } catch {} })
             $tmr.Start()
-        }).GetNewClosure()) | Out-Null
+        }) | Out-Null
     })
     $licWin.ShowDialog() | Out-Null
     # Vrati splash ako je licenca uspjesna (nastavlja loading)
