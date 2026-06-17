@@ -4343,9 +4343,8 @@ try {
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <!-- ANIMIRANI POZADINSKI SLOJ -->
-            <Canvas x:Name="bgCanvas" Grid.RowSpan="2" Panel.ZIndex="0"
-                    IsHitTestVisible="False" ClipToBounds="True">
+            <!-- STATICKI POZADINSKI SLOJ (animacije uklonjene — Storyboard.TargetName na Freezable crashira .NET 4.x) -->
+            <Canvas Grid.RowSpan="2" Panel.ZIndex="0" IsHitTestVisible="False" ClipToBounds="True">
                 <Ellipse Width="520" Height="520" Canvas.Left="-140" Canvas.Top="-160" Opacity="0.07">
                     <Ellipse.Fill>
                         <RadialGradientBrush>
@@ -4353,9 +4352,6 @@ try {
                             <GradientStop Color="#00F5C518" Offset="1"/>
                         </RadialGradientBrush>
                     </Ellipse.Fill>
-                    <Ellipse.RenderTransform>
-                        <TranslateTransform x:Name="bgT1" X="0" Y="0"/>
-                    </Ellipse.RenderTransform>
                 </Ellipse>
                 <Ellipse Width="640" Height="640" Canvas.Left="540" Canvas.Top="220" Opacity="0.05">
                     <Ellipse.Fill>
@@ -4364,9 +4360,6 @@ try {
                             <GradientStop Color="#007a5a10" Offset="1"/>
                         </RadialGradientBrush>
                     </Ellipse.Fill>
-                    <Ellipse.RenderTransform>
-                        <TranslateTransform x:Name="bgT2" X="0" Y="0"/>
-                    </Ellipse.RenderTransform>
                 </Ellipse>
                 <Ellipse Width="380" Height="380" Canvas.Left="200" Canvas.Top="450" Opacity="0.04">
                     <Ellipse.Fill>
@@ -4375,30 +4368,7 @@ try {
                             <GradientStop Color="#003a8b3a" Offset="1"/>
                         </RadialGradientBrush>
                     </Ellipse.Fill>
-                    <Ellipse.RenderTransform>
-                        <TranslateTransform x:Name="bgT3" X="0" Y="0"/>
-                    </Ellipse.RenderTransform>
                 </Ellipse>
-                <Canvas.Triggers>
-                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                        <BeginStoryboard>
-                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
-                                <DoubleAnimation Storyboard.TargetName="bgT1" Storyboard.TargetProperty="X"
-                                                 From="0" To="120" Duration="0:0:32"/>
-                                <DoubleAnimation Storyboard.TargetName="bgT1" Storyboard.TargetProperty="Y"
-                                                 From="0" To="90" Duration="0:0:38"/>
-                                <DoubleAnimation Storyboard.TargetName="bgT2" Storyboard.TargetProperty="X"
-                                                 From="0" To="-140" Duration="0:0:40"/>
-                                <DoubleAnimation Storyboard.TargetName="bgT2" Storyboard.TargetProperty="Y"
-                                                 From="0" To="-100" Duration="0:0:36"/>
-                                <DoubleAnimation Storyboard.TargetName="bgT3" Storyboard.TargetProperty="X"
-                                                 From="0" To="100" Duration="0:0:42"/>
-                                <DoubleAnimation Storyboard.TargetName="bgT3" Storyboard.TargetProperty="Y"
-                                                 From="0" To="-120" Duration="0:0:44"/>
-                            </Storyboard>
-                        </BeginStoryboard>
-                    </EventTrigger>
-                </Canvas.Triggers>
             </Canvas>
 
             <!-- TOAST OVERLAY -->
