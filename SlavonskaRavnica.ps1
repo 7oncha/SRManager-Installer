@@ -6536,20 +6536,20 @@ Write-BootLog "START: Ucitavam sucelje (XAML parse)"
 Set-SplashStep "Ucitavam sucelje..." 28
 # Trap za hvatanje neobradjenih gresaka nakon XAML ucitavanja
 trap {
-    $errMsg = "LAUNCHER CRASH: $($_.Exception.ToString())`n`nLine: $($_.InvocationInfo.ScriptLineNumber)"
+    $errMsg = "PAD LAUNCHERA: $($_.Exception.ToString())`n`nLinija: $($_.InvocationInfo.ScriptLineNumber)"
     try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "sr_crash.log"), $errMsg) } catch {}
     try { Close-StartupSplash } catch {}
-    try { [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Crash", "OK", "Error") } catch {}
+    try { [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Greska", "OK", "Error") } catch {}
     break
 }
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 try {
     $window = [Windows.Markup.XamlReader]::Load($reader)
 } catch {
-    $errMsg = "XAML PARSE ERROR: $($_.Exception.ToString())"
+    $errMsg = "XAML GRESKA: $($_.Exception.ToString())"
     try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "sr_crash.log"), $errMsg) } catch {}
     try { Close-StartupSplash } catch {}
-    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - XAML Error", "OK", "Error") | Out-Null
+    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Greska", "OK", "Error") | Out-Null
     return
 }
 if (-not $window) {
