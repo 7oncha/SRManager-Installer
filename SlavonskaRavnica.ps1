@@ -6,7 +6,7 @@
 # ============================================================
 
 # Dijagnosticki boot log — pokrece se ODMAH na pocetku skripte za pracenje di se zaglavi
-$script:BootLogPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Definition) "sr_boot.log"
+$script:BootLogPath = Join-Path $PSScriptRoot "sr_boot.log"
 function Write-BootLog { param([string]$Msg) try { [System.IO.File]::AppendAllText($script:BootLogPath, "$(Get-Date -f 'HH:mm:ss.fff') $Msg`r`n") } catch {} }
 try { [System.IO.File]::WriteAllText($script:BootLogPath, "=== SR Manager Boot $(Get-Date -f 'yyyy-MM-dd HH:mm:ss') ===`r`n") } catch {}
 Write-BootLog "START: Script poceo"
