@@ -4705,28 +4705,26 @@ $script:PreloadedLocalModCount = $null
                                     <!-- LIJEVA STRANA: server info -->
                                     <StackPanel Grid.Column="0" Margin="26,22,16,22">
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                            <Border Width="14" Height="14" CornerRadius="7"
+                                            <Border x:Name="dashStatusDot" Width="14" Height="14" CornerRadius="7"
                                                     VerticalAlignment="Center" Margin="0,0,12,0">
                                                 <Border.Background>
                                                     <SolidColorBrush x:Name="dashStatusBrush" Color="#E5484D"/>
                                                 </Border.Background>
                                                 <Border.Effect>
-                                                    <DropShadowEffect x:Name="dashStatusGlow" Color="#E5484D" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
+                                                    <DropShadowEffect Color="#E5484D" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
                                                 </Border.Effect>
                                                 <Border.Triggers>
                                                     <EventTrigger RoutedEvent="Border.Loaded">
                                                         <BeginStoryboard>
                                                             <Storyboard RepeatBehavior="Forever">
-                                                                <DoubleAnimation Storyboard.TargetName="dashStatusGlow"
-                                                                                 Storyboard.TargetProperty="BlurRadius"
+                                                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.Effect).(DropShadowEffect.BlurRadius)"
                                                                                  From="12" To="22" Duration="0:0:1.6"
                                                                                  AutoReverse="True">
                                                                     <DoubleAnimation.EasingFunction>
                                                                         <SineEase EasingMode="EaseInOut"/>
                                                                     </DoubleAnimation.EasingFunction>
                                                                 </DoubleAnimation>
-                                                                <DoubleAnimation Storyboard.TargetName="dashStatusGlow"
-                                                                                 Storyboard.TargetProperty="Opacity"
+                                                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.Effect).(DropShadowEffect.Opacity)"
                                                                                  From="0.55" To="0.95" Duration="0:0:1.6"
                                                                                  AutoReverse="True">
                                                                     <DoubleAnimation.EasingFunction>
@@ -6529,9 +6527,40 @@ try {
     }
 } catch {}
 
+# Dijagnosticki log — svaki korak se zapisuje u sr_boot.log da znamo di se zaglavi
+$script:BootLogPath = Join-Path $PSScriptRoot "sr_boot.log"
+function Write-BootLog { param([string]$Msg) try { [System.IO.File]::AppendAllText($script:BootLogPath, "$(Get-Date -f 'HH:mm:ss.fff') $Msg`r`n") } catch {} }
+try { [System.IO.File]::WriteAllText($script:BootLogPath, "=== SR Manager Boot $(Get-Date -f 'yyyy-MM-dd HH:mm:ss') ===`r`n") } catch {}
+
+Write-BootLog "START: Ucitavam sucelje (XAML parse)"
 Set-SplashStep "Ucitavam sucelje..." 28
+# Trap za hvatanje neobradjenih gresaka nakon XAML ucitavanja
+trap {
+    $errMsg = "LAUNCHER CRASH: $($_.Exception.ToString())`n`nLine: $($_.InvocationInfo.ScriptLineNumber)"
+    try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "sr_crash.log"), $errMsg) } catch {}
+    try { Close-StartupSplash } catch {}
+    try { [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Crash", "OK", "Error") } catch {}
+    break
+}
 $reader = New-Object System.Xml.XmlNodeReader $xaml
-$window = [Windows.Markup.XamlReader]::Load($reader)
+try {
+    $window = [Windows.Markup.XamlReader]::Load($reader)
+} catch {
+    $errMsg = "XAML PARSE ERROR: $($_.Exception.ToString())"
+    try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "sr_crash.log"), $errMsg) } catch {}
+    try { Close-StartupSplash } catch {}
+    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - XAML Error", "OK", "Error") | Out-Null
+    return
+}
+if (-not $window) {
+    $errMsg = "XAML ucitavanje neuspjesno — window objekt je null."
+    Write-BootLog "FAIL: $errMsg"
+    try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "sr_crash.log"), $errMsg) } catch {}
+    try { Close-StartupSplash } catch {}
+    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Error", "OK", "Error") | Out-Null
+    return
+}
+Write-BootLog "OK: XAML loaded, window created"
 Invoke-SplashPump
 
 # Postavi taskbar ikonu
@@ -6607,7 +6636,8 @@ $txtMissingCount     = $window.FindName("txtMissingCount")
 $txtModSizeTotal     = $window.FindName("txtModSizeTotal")
 $txtServerPing       = $window.FindName("txtServerPing")
 $dashStatusBrush     = $window.FindName("dashStatusBrush")
-$dashStatusGlow      = $window.FindName("dashStatusGlow")
+$dashStatusDot       = $window.FindName("dashStatusDot")
+$dashStatusGlow      = if ($dashStatusDot) { $dashStatusDot.Effect } else { $null }
 $txtModSubtitle      = $window.FindName("txtModSubtitle")
 $txtModsLocal        = $window.FindName("txtModsLocal")
 $txtModsServer       = $window.FindName("txtModsServer")
@@ -10230,6 +10260,7 @@ function Ensure-LicenseValid {
 }
 
 # Licenca + mrezni preload (splash jos vidljiv - bez praznog ekrana prije glavnog prozora)
+Write-BootLog "START: FindName + event handlers done, starting preload"
 Set-SplashStep "Provjera licence..." 45
 if (-not (Ensure-LicenseValid)) {
     Close-StartupSplash
@@ -10237,14 +10268,18 @@ if (-not (Ensure-LicenseValid)) {
     return
 }
 
+Write-BootLog "OK: License valid"
 Set-SplashStep "Sinkronizacija servera..." 58
 try { $script:PreloadedServerStatus = Get-ServerStatus } catch {}
+Write-BootLog "OK: Server status done"
 
 Set-SplashStep "Provjera modova..." 74
 try { $script:PreloadedModList = Get-ServerModList } catch {}
+Write-BootLog "OK: Mod list done"
 
 Set-SplashStep "Ucitavam opcije igre..." 78
 try { $script:PreloadedGameSettings = Read-GameSettings } catch {}
+Write-BootLog "OK: Game settings done"
 Invoke-SplashPump
 
 Set-SplashStep "Skeniram lokalne modove..." 86
@@ -10259,9 +10294,11 @@ Invoke-SplashPump
 
 Set-SplashStep "Ucitavam savegame slotove..." 92
 try { $script:PreloadedSavegames = Get-FS25SavegameList } catch {}
+Write-BootLog "OK: Savegames done"
 Invoke-SplashPump
 
 Set-SplashStep "Pokrecem..." 100
+Write-BootLog "START: Initialize lifecycle + show window"
 Initialize-WpfApplicationLifecycle
 
 # ============================================================
@@ -10326,15 +10363,31 @@ try {
         $app.Add_DispatcherUnhandledException({
             param($s, $e)
             try { Write-Log "WPF UNHANDLED: $($e.Exception.ToString())" } catch {}
+            try { Write-BootLog "WPF UNHANDLED: $($e.Exception.Message)" } catch {}
+            try { [System.IO.File]::AppendAllText((Join-Path $PSScriptRoot "sr_crash.log"), "WPF UNHANDLED: $($e.Exception.ToString())`r`n") } catch {}
             $e.Handled = $true
         })
     }
 } catch {}
 
 # Prikaži glavni prozor prije zatvaranja splasha (inače OnLastWindowClose može ugasiti app).
-$window.Show()
-Close-StartupSplash
+Write-BootLog "START: window.Show()"
+try {
+    $window.Show()
+    Write-BootLog "OK: window.Show() succeeded"
+    Close-StartupSplash
+    Write-BootLog "OK: Splash closed, main window visible"
+} catch {
+    try { Close-StartupSplash } catch {}
+    $errMsg = "Greska pri otvaranju prozora: $($_.Exception.ToString())"
+    Write-BootLog "FAIL: $errMsg"
+    try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "sr_crash.log"), $errMsg) } catch {}
+    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Error", "OK", "Error") | Out-Null
+    return
+}
 # DispatcherFrame umjesto ShowDialog — ShowDialog baca gresku na vec prikazanom prozoru
+Write-BootLog "START: PushFrame (event loop)"
 $script:_mainFrame = [System.Windows.Threading.DispatcherFrame]::new()
 $window.Add_Closed({ $script:_mainFrame.Continue = $false })
 [System.Windows.Threading.Dispatcher]::PushFrame($script:_mainFrame)
+Write-BootLog "END: Window closed, exiting"
