@@ -115,6 +115,90 @@ function Get-SHA256 {
 }
 
 # ============================================================
+# SHARED UTILITIES - WPF boje i UI helperi
+# ============================================================
+function New-SRBrush {
+    # Skraceni poziv za SolidColorBrush iz hex stringa
+    param([string]$Hex)
+    [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex)
+}
+
+function New-SRFontFamily {
+    param([string]$Name = "Segoe UI")
+    New-Object System.Windows.Media.FontFamily($Name)
+}
+
+# ============================================================
+# SHARED UTILITIES - JSON store (ucitaj/spremi za konfig datoteke)
+# ============================================================
+function Read-JsonStore {
+    # Citanje JSON fajla s defaultnom vrijednoscu ako ne postoji ili je neispravan
+    param(
+        [string]$Path,
+        [PSCustomObject]$Default
+    )
+    if (-not (Test-Path $Path)) { return $Default }
+    try {
+        return (Get-Content $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
+    } catch { return $Default }
+}
+
+function Write-JsonStore {
+    # Zapisivanje objekta u JSON fajl (kreira direktorij ako ne postoji)
+    param(
+        [string]$Path,
+        $Data,
+        [int]$Depth = 5
+    )
+    $dir = Split-Path $Path -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $Data | ConvertTo-Json -Depth $Depth | Set-Content $Path -Encoding UTF8
+}
+
+# ============================================================
+# SHARED UTILITIES - PSObject konverzija i HTTP parsiranje
+# ============================================================
+function ConvertTo-Hashtable {
+    # Pretvara PSCustomObject u hashtable (plitka konverzija)
+    param([PSCustomObject]$InputObject)
+    $h = @{}
+    foreach ($p in $InputObject.PSObject.Properties) { $h[$p.Name] = $p.Value }
+    return $h
+}
+
+function Read-HttpErrorBody {
+    # Parsira JSON tijelo iz HTTP error odgovora
+    param($Exception)
+    try {
+        $stream = $Exception.Response.GetResponseStream()
+        if ($stream) {
+            $reader = New-Object System.IO.StreamReader($stream)
+            $errBody = $reader.ReadToEnd()
+            return ($errBody | ConvertFrom-Json -ErrorAction Stop)
+        }
+    } catch {}
+    return $null
+}
+
+function New-LicenseCacheEntry {
+    # Gradi hashtable za DPAPI-enkriptirani license cache
+    param(
+        [string]$Key,
+        [string]$Hwid,
+        $Entry
+    )
+    return @{
+        key        = $Key
+        keyHash    = (Get-SHA256 $Key)
+        hwid       = $Hwid
+        expiresAt  = $Entry.expiresAt
+        discordId  = [string]$Entry.discordId
+        permanent  = [bool]$Entry.permanent
+        lastCheck  = (Get-Date).ToUniversalTime().ToString("o")
+    }
+}
+
+# ============================================================
 # LICENSE - HWID
 # ============================================================
 function Get-Hwid {
@@ -252,29 +336,19 @@ function Invoke-LicenseApi {
         }
         $resp = Invoke-WebRequest -Uri $url -Method POST -Headers $headers -Body $json -UseBasicParsing -TimeoutSec 12
         $obj = $resp.Content | ConvertFrom-Json
-        # Convert PSCustomObject to hashtable-like access (already works via dot notation but normalise ok flag)
         if ($null -eq $obj.ok) { return @{ ok = $false; reason = 'Neispravan odgovor servera.'; status = 'unknown' } }
-        $h = @{}
-        foreach ($p in $obj.PSObject.Properties) { $h[$p.Name] = $p.Value }
-        return $h
+        return (ConvertTo-Hashtable $obj)
     } catch {
         $msg = $_.Exception.Message
         $statusCode = $null
         try { $statusCode = $_.Exception.Response.StatusCode.Value__ } catch {}
-        # Try parse JSON body of error
-        try {
-            $stream = $_.Exception.Response.GetResponseStream()
-            if ($stream) {
-                $reader = New-Object System.IO.StreamReader($stream)
-                $errBody = $reader.ReadToEnd()
-                $errObj = $errBody | ConvertFrom-Json -ErrorAction Stop
-                $h = @{}
-                foreach ($p in $errObj.PSObject.Properties) { $h[$p.Name] = $p.Value }
-                if (-not $h.reason) { $h.reason = "HTTP $statusCode" }
-                if ($null -eq $h.ok) { $h.ok = $false }
-                return $h
-            }
-        } catch {}
+        $errObj = Read-HttpErrorBody -Exception $_.Exception
+        if ($errObj) {
+            $h = ConvertTo-Hashtable $errObj
+            if (-not $h.reason) { $h.reason = "HTTP $statusCode" }
+            if ($null -eq $h.ok) { $h.ok = $false }
+            return $h
+        }
         return @{ ok = $false; reason = "Greska kod spajanja na server: $msg"; status = 'network' }
     }
 }
@@ -735,8 +809,6 @@ function Merge-UserGameSettings {
 }
 
 function Save-UserGameSettings {
-    $dir = Split-Path $script:UserSettingsPath -Parent
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $obj = [ordered]@{
         gamePlatform    = if ($script:Config.gamePlatform) { [string]$script:Config.gamePlatform } else { 'steam' }
         gamePath        = if ($script:Config.gamePath) { [string]$script:Config.gamePath } else { '' }
@@ -749,7 +821,7 @@ function Save-UserGameSettings {
         windowMaximize  = [bool]$script:Config.windowMaximize
         savedAt         = (Get-Date).ToUniversalTime().ToString('o')
     }
-    ($obj | ConvertTo-Json -Depth 3) | Set-Content $script:UserSettingsPath -Encoding UTF8
+    Write-JsonStore -Path $script:UserSettingsPath -Data $obj -Depth 3
 }
 
 function Sync-GameLaunchUiFromConfig {
@@ -1186,26 +1258,22 @@ function Get-WalkthroughSettings {
         completed    = $false
         lastStep     = 0
     }
-    if (-not (Test-Path $script:WalkthroughPath)) { return $default }
-    try {
-        $raw = Get-Content $script:WalkthroughPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        return [PSCustomObject]@{
-            skipOnLaunch = [bool]$raw.skipOnLaunch
-            completed    = [bool]$raw.completed
-            lastStep     = [int]$raw.lastStep
-        }
-    } catch { return $default }
+    $raw = Read-JsonStore -Path $script:WalkthroughPath -Default $null
+    if (-not $raw) { return $default }
+    return [PSCustomObject]@{
+        skipOnLaunch = [bool]$raw.skipOnLaunch
+        completed    = [bool]$raw.completed
+        lastStep     = [int]$raw.lastStep
+    }
 }
 
 function Save-WalkthroughSettings {
     param($Settings)
-    $dir = Split-Path $script:WalkthroughPath -Parent
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    @{
+    Write-JsonStore -Path $script:WalkthroughPath -Data @{
         skipOnLaunch = [bool]$Settings.skipOnLaunch
         completed    = [bool]$Settings.completed
         lastStep     = [int]$Settings.lastStep
-    } | ConvertTo-Json | Set-Content $script:WalkthroughPath -Encoding UTF8
+    }
 }
 
 function Get-ModSyncStatusLabel {
@@ -1838,39 +1906,29 @@ function Get-ModProfilesStore {
         activeProfileId = ""
         profiles        = @{}
     }
-    if (-not (Test-Path $script:ModProfilesPath)) { return $default }
-    try {
-        $raw = Get-Content $script:ModProfilesPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if (-not $raw.profiles) { $raw | Add-Member -NotePropertyName profiles -NotePropertyValue (@{}) -Force }
-        return $raw
-    } catch {
-        return $default
-    }
+    $raw = Read-JsonStore -Path $script:ModProfilesPath -Default $null
+    if (-not $raw) { return $default }
+    if (-not $raw.profiles) { $raw | Add-Member -NotePropertyName profiles -NotePropertyValue (@{}) -Force }
+    return $raw
 }
 
 function Save-ModProfilesStore {
     param($Store)
-    $dir = Split-Path $script:ModProfilesPath -Parent
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $Store | ConvertTo-Json -Depth 6 | Set-Content $script:ModProfilesPath -Encoding UTF8
+    Write-JsonStore -Path $script:ModProfilesPath -Data $Store -Depth 6
 }
 
 function Get-ModFavoritesStore {
     $default = [PSCustomObject]@{ version = 1; favorites = @() }
-    if (-not (Test-Path $script:ModFavoritesPath)) { return $default }
-    try {
-        $raw = Get-Content $script:ModFavoritesPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $list = @()
-        if ($raw.favorites) { $list = @($raw.favorites | ForEach-Object { [string]$_ }) }
-        return [PSCustomObject]@{ version = 1; favorites = $list }
-    } catch { return $default }
+    $raw = Read-JsonStore -Path $script:ModFavoritesPath -Default $null
+    if (-not $raw) { return $default }
+    $list = @()
+    if ($raw.favorites) { $list = @($raw.favorites | ForEach-Object { [string]$_ }) }
+    return [PSCustomObject]@{ version = 1; favorites = $list }
 }
 
 function Save-ModFavoritesStore {
     param($Store)
-    $dir = Split-Path $script:ModFavoritesPath -Parent
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $Store | ConvertTo-Json -Depth 4 | Set-Content $script:ModFavoritesPath -Encoding UTF8
+    Write-JsonStore -Path $script:ModFavoritesPath -Data $Store -Depth 4
 }
 
 function Get-ModFavoriteKey {
@@ -2032,10 +2090,10 @@ function Refresh-IgraPage {
     $root = Get-FS25UserDataPath
     if ($root) {
         $txtIgraSavePath.Text = "Odaberi save koji si vec kreirao u FS25."
-        $txtIgraSavePath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#888")
+        $txtIgraSavePath.Foreground = (New-SRBrush "#888")
     } else {
         $txtIgraSavePath.Text = 'FS25 user data nije pronaden. Pokreni FS25 i kreiraj barem jedan save.'
-        $txtIgraSavePath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E5484D")
+        $txtIgraSavePath.Foreground = (New-SRBrush "#E5484D")
     }
     $lstSavegames.ItemsSource = $null
     $saves = Get-FS25SavegameList
@@ -2062,20 +2120,16 @@ function Get-MultiplayerFoldersStore {
         selectedByServer = @{}
         folders          = @{}
     }
-    if (-not (Test-Path $script:MultiplayerFoldersPath)) { return $default }
-    try {
-        $raw = Get-Content $script:MultiplayerFoldersPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if (-not $raw.folders) { $raw | Add-Member -NotePropertyName folders -NotePropertyValue (@{}) -Force }
-        if (-not $raw.selectedByServer) { $raw | Add-Member -NotePropertyName selectedByServer -NotePropertyValue (@{}) -Force }
-        return $raw
-    } catch { return $default }
+    $raw = Read-JsonStore -Path $script:MultiplayerFoldersPath -Default $null
+    if (-not $raw) { return $default }
+    if (-not $raw.folders) { $raw | Add-Member -NotePropertyName folders -NotePropertyValue (@{}) -Force }
+    if (-not $raw.selectedByServer) { $raw | Add-Member -NotePropertyName selectedByServer -NotePropertyValue (@{}) -Force }
+    return $raw
 }
 
 function Save-MultiplayerFoldersStore {
     param($Store)
-    $dir = Split-Path $script:MultiplayerFoldersPath -Parent
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $Store | ConvertTo-Json -Depth 8 | Set-Content $script:MultiplayerFoldersPath -Encoding UTF8
+    Write-JsonStore -Path $script:MultiplayerFoldersPath -Data $Store -Depth 8
 }
 
 function Get-ServerMpFolderId {
@@ -2416,34 +2470,34 @@ function Show-PasswordDialog {
 
     $border = New-Object System.Windows.Controls.Border
     $border.CornerRadius = "10"
-    $border.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#161616")
-    $border.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
+    $border.Background = (New-SRBrush "#161616")
+    $border.BorderBrush = (New-SRBrush "#F5C518")
     $border.BorderThickness = "1"; $border.Padding = "28"
 
     $sp = New-Object System.Windows.Controls.StackPanel
 
     $ttl = New-Object System.Windows.Controls.TextBlock
     $ttl.Text = $dialogTitle
-    $ttl.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
+    $ttl.Foreground = (New-SRBrush "#F5C518")
     $ttl.FontSize = 16; $ttl.FontWeight = "Bold"
-    $ttl.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+    $ttl.FontFamily = (New-SRFontFamily)
     $ttl.Margin = "0,0,0,8"
     $sp.Children.Add($ttl) | Out-Null
 
     $lbl = New-Object System.Windows.Controls.TextBlock
     $lbl.Text = $dialogPrompt
-    $lbl.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#dddddd')
+    $lbl.Foreground = (New-SRBrush '#dddddd')
     $lbl.FontSize = 13; $lbl.TextWrapping = "Wrap"
-    $lbl.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+    $lbl.FontFamily = (New-SRFontFamily)
     $lbl.Margin = "0,0,0,14"
     $sp.Children.Add($lbl) | Out-Null
 
     $pwd = New-Object System.Windows.Controls.PasswordBox
-    $pwd.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1a1a1a")
-    $pwd.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#eeeeee')
+    $pwd.Background = (New-SRBrush "#1a1a1a")
+    $pwd.Foreground = (New-SRBrush '#eeeeee')
     $pwd.Padding = "10,8"; $pwd.FontSize = 13
-    $pwd.CaretBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
-    $pwd.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#333")
+    $pwd.CaretBrush = (New-SRBrush "#F5C518")
+    $pwd.BorderBrush = (New-SRBrush "#333")
     $pwd.BorderThickness = "1"; $pwd.Margin = "0,0,0,18"
     $sp.Children.Add($pwd) | Out-Null
 
@@ -2452,16 +2506,16 @@ function Show-PasswordDialog {
 
     $ok = New-Object System.Windows.Controls.Button
     $ok.Content = "Potvrdi"; $ok.Width = 100; $ok.Padding = "0,10,0,10"
-    $ok.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
-    $ok.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#111")
+    $ok.Background = (New-SRBrush "#F5C518")
+    $ok.Foreground = (New-SRBrush "#111")
     $ok.FontWeight = "Bold"; $ok.BorderThickness = "0"; $ok.Cursor = "Hand"; $ok.Margin = "0,0,8,0"
     $ok.Add_Click({ $dlg.Tag = $pwd.Password; $dlg.DialogResult = $true })
     $bp.Children.Add($ok) | Out-Null
 
     $cn = New-Object System.Windows.Controls.Button
     $cn.Content = "Odustani"; $cn.Width = 100; $cn.Padding = "0,10,0,10"
-    $cn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#333")
-    $cn.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#cccccc')
+    $cn.Background = (New-SRBrush "#333")
+    $cn.Foreground = (New-SRBrush '#cccccc')
     $cn.BorderThickness = "0"; $cn.Cursor = "Hand"
     $cn.Add_Click({ $dlg.DialogResult = $false })
     $bp.Children.Add($cn) | Out-Null
@@ -2511,8 +2565,8 @@ function Show-SRDialog {
 
     $border = New-Object System.Windows.Controls.Border
     $border.CornerRadius = "12"
-    $border.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#161616")
-    $border.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString($accentColor)
+    $border.Background = (New-SRBrush "#161616")
+    $border.BorderBrush = (New-SRBrush $accentColor)
     $border.BorderThickness = "1"; $border.Padding = "28,24"
 
     $sp = New-Object System.Windows.Controls.StackPanel
@@ -2525,16 +2579,16 @@ function Show-SRDialog {
     $iconTb = New-Object System.Windows.Controls.TextBlock
     $iconTb.Text = $iconSymbol
     $iconTb.FontSize = 20
-    $iconTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($accentColor)
+    $iconTb.Foreground = (New-SRBrush $accentColor)
     $iconTb.Margin = "0,0,10,0"
     $iconTb.VerticalAlignment = "Center"
     $headerPanel.Children.Add($iconTb) | Out-Null
 
     $ttl = New-Object System.Windows.Controls.TextBlock
     $ttl.Text = $title
-    $ttl.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($accentColor)
+    $ttl.Foreground = (New-SRBrush $accentColor)
     $ttl.FontSize = 16; $ttl.FontWeight = "Bold"
-    $ttl.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+    $ttl.FontFamily = (New-SRFontFamily)
     $ttl.VerticalAlignment = "Center"
     $headerPanel.Children.Add($ttl) | Out-Null
 
@@ -2542,17 +2596,17 @@ function Show-SRDialog {
 
     $msg = New-Object System.Windows.Controls.TextBlock
     $msg.Text = $message
-    $msg.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#ccc")
+    $msg.Foreground = (New-SRBrush "#ccc")
     $msg.FontSize = 13; $msg.TextWrapping = "Wrap"
-    $msg.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+    $msg.FontFamily = (New-SRFontFamily)
     $msg.Margin = "0,0,0,20"
     $sp.Children.Add($msg) | Out-Null
 
     $ok = New-Object System.Windows.Controls.Button
     $ok.Content = "U redu"; $ok.HorizontalAlignment = "Right"
     $ok.Width = 110; $ok.Padding = "0,10,0,10"
-    $ok.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString($accentColor)
-    $ok.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#111")
+    $ok.Background = (New-SRBrush $accentColor)
+    $ok.Foreground = (New-SRBrush "#111")
     $ok.FontWeight = "Bold"; $ok.FontSize = 13; $ok.BorderThickness = "0"; $ok.Cursor = "Hand"
     $ok.Add_Click({ $dlg.DialogResult = $true })
     $sp.Children.Add($ok) | Out-Null
@@ -2581,8 +2635,8 @@ function Show-SRConfirm {
 
     $border = New-Object System.Windows.Controls.Border
     $border.CornerRadius = "12"
-    $border.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#161616")
-    $border.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
+    $border.Background = (New-SRBrush "#161616")
+    $border.BorderBrush = (New-SRBrush "#F5C518")
     $border.BorderThickness = "1"; $border.Padding = "28,24"
 
     $sp = New-Object System.Windows.Controls.StackPanel
@@ -2594,16 +2648,16 @@ function Show-SRConfirm {
     $iconTb = New-Object System.Windows.Controls.TextBlock
     $iconTb.Text = "?"
     $iconTb.FontSize = 22; $iconTb.FontWeight = "Bold"
-    $iconTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
+    $iconTb.Foreground = (New-SRBrush "#F5C518")
     $iconTb.Margin = "0,0,10,0"
     $iconTb.VerticalAlignment = "Center"
     $headerPanel.Children.Add($iconTb) | Out-Null
 
     $ttl = New-Object System.Windows.Controls.TextBlock
     $ttl.Text = $title
-    $ttl.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
+    $ttl.Foreground = (New-SRBrush "#F5C518")
     $ttl.FontSize = 16; $ttl.FontWeight = "Bold"
-    $ttl.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+    $ttl.FontFamily = (New-SRFontFamily)
     $ttl.VerticalAlignment = "Center"
     $headerPanel.Children.Add($ttl) | Out-Null
 
@@ -2611,9 +2665,9 @@ function Show-SRConfirm {
 
     $msg = New-Object System.Windows.Controls.TextBlock
     $msg.Text = $message
-    $msg.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#ccc")
+    $msg.Foreground = (New-SRBrush "#ccc")
     $msg.FontSize = 13; $msg.TextWrapping = "Wrap"
-    $msg.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+    $msg.FontFamily = (New-SRFontFamily)
     $msg.Margin = "0,0,0,20"
     $sp.Children.Add($msg) | Out-Null
 
@@ -2622,8 +2676,8 @@ function Show-SRConfirm {
 
     $yes = New-Object System.Windows.Controls.Button
     $yes.Content = $yesText; $yes.Width = 100; $yes.Padding = "0,10,0,10"
-    $yes.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
-    $yes.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#111")
+    $yes.Background = (New-SRBrush "#F5C518")
+    $yes.Foreground = (New-SRBrush "#111")
     $yes.FontWeight = "Bold"; $yes.FontSize = 13; $yes.BorderThickness = "0"; $yes.Cursor = "Hand"
     $yes.Margin = "0,0,8,0"
     $yes.Add_Click({ $dlg.Tag = "Yes"; $dlg.DialogResult = $true })
@@ -2631,8 +2685,8 @@ function Show-SRConfirm {
 
     $no = New-Object System.Windows.Controls.Button
     $no.Content = $noText; $no.Width = 100; $no.Padding = "0,10,0,10"
-    $no.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#333")
-    $no.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#cccccc')
+    $no.Background = (New-SRBrush "#333")
+    $no.Foreground = (New-SRBrush '#cccccc')
     $no.FontSize = 13; $no.BorderThickness = "0"; $no.Cursor = "Hand"
     $no.Margin = "0,0,8,0"
     $no.Add_Click({ $dlg.Tag = "No"; $dlg.DialogResult = $true })
@@ -2641,8 +2695,8 @@ function Show-SRConfirm {
     if ($showCancel) {
         $cancel = New-Object System.Windows.Controls.Button
         $cancel.Content = "Odustani"; $cancel.Width = 100; $cancel.Padding = "0,10,0,10"
-        $cancel.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#222")
-        $cancel.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#888")
+        $cancel.Background = (New-SRBrush "#222")
+        $cancel.Foreground = (New-SRBrush "#888")
         $cancel.FontSize = 13; $cancel.BorderThickness = "0"; $cancel.Cursor = "Hand"
         $cancel.Add_Click({ $dlg.Tag = "Cancel"; $dlg.DialogResult = $true })
         $bp.Children.Add($cancel) | Out-Null
@@ -3310,8 +3364,8 @@ function Show-SplashScreen {
 
     $border = New-Object System.Windows.Controls.Border
     $border.CornerRadius = "16"
-    $border.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#0d0d0d")
-    $border.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
+    $border.Background = (New-SRBrush "#0d0d0d")
+    $border.BorderBrush = (New-SRBrush "#F5C518")
     $border.BorderThickness = "1"
     $border.Padding = "30,24"
     # Glow efekt oko splash prozora
@@ -3349,37 +3403,37 @@ function Show-SplashScreen {
     $title = New-Object System.Windows.Controls.TextBlock
     $title.Text = "Slavonska Ravnica"
     $title.FontSize = 20; $title.FontWeight = "Bold"
-    $title.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
+    $title.Foreground = (New-SRBrush "#F5C518")
     $title.HorizontalAlignment = "Center"
-    $title.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+    $title.FontFamily = (New-SRFontFamily)
     $title.Margin = "0,0,0,6"
     $sp.Children.Add($title) | Out-Null
 
     $ver = New-Object System.Windows.Controls.TextBlock
     $ver.Text = "v$($script:AppVersion)"
-    $ver.FontSize = 11; $ver.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#666")
+    $ver.FontSize = 11; $ver.Foreground = (New-SRBrush "#666")
     $ver.HorizontalAlignment = "Center"
-    $ver.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+    $ver.FontFamily = (New-SRFontFamily)
     $ver.Margin = "0,0,0,20"
     $sp.Children.Add($ver) | Out-Null
 
     $status = New-Object System.Windows.Controls.TextBlock
     $status.Text = "Ucitavam..."
-    $status.FontSize = 12; $status.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#aaa")
+    $status.FontSize = 12; $status.Foreground = (New-SRBrush "#aaa")
     $status.HorizontalAlignment = "Center"
-    $status.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+    $status.FontFamily = (New-SRFontFamily)
     $status.Margin = "0,0,0,10"
     $sp.Children.Add($status) | Out-Null
 
     # Progress bar
     $progressBorder = New-Object System.Windows.Controls.Border
     $progressBorder.Height = 6; $progressBorder.CornerRadius = "3"
-    $progressBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1a1a1a")
+    $progressBorder.Background = (New-SRBrush "#1a1a1a")
     $progressBorder.HorizontalAlignment = "Stretch"
     $progressGrid = New-Object System.Windows.Controls.Grid
     $progressFill = New-Object System.Windows.Controls.Border
     $progressFill.Height = 6; $progressFill.CornerRadius = "3"
-    $progressFill.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
+    $progressFill.Background = (New-SRBrush "#F5C518")
     # Glow na progress baru
     $progressGlow = New-Object System.Windows.Media.Effects.DropShadowEffect
     $progressGlow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#F5C518")
@@ -7499,29 +7553,29 @@ function Show-SaveWizard {
 
     $outer = New-Object System.Windows.Controls.Border
     $outer.CornerRadius = '12'
-    $outer.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#121212')
-    $outer.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F5C518')
+    $outer.Background = (New-SRBrush '#121212')
+    $outer.BorderBrush = (New-SRBrush '#F5C518')
     $outer.BorderThickness = '1'
     $outer.Padding = '24,22'
     $sp = New-Object System.Windows.Controls.StackPanel
 
     $ttl = New-Object System.Windows.Controls.TextBlock
     $ttl.Text = 'KONFIGURIRAJ SAVE'
-    $ttl.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F5C518')
+    $ttl.Foreground = (New-SRBrush '#F5C518')
     $ttl.FontSize = 18
     $ttl.FontWeight = 'Bold'
     $ttl.FontFamily = New-Object System.Windows.Media.FontFamily('Segoe UI')
     $sp.Children.Add($ttl) | Out-Null
 
     $stepLbl = New-Object System.Windows.Controls.TextBlock
-    $stepLbl.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#888')
+    $stepLbl.Foreground = (New-SRBrush '#888')
     $stepLbl.FontSize = 11
     $stepLbl.Margin = '0,6,0,14'
     $stepLbl.FontFamily = New-Object System.Windows.Media.FontFamily('Segoe UI')
     $sp.Children.Add($stepLbl) | Out-Null
 
     $body = New-Object System.Windows.Controls.TextBlock
-    $body.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#ccc')
+    $body.Foreground = (New-SRBrush '#ccc')
     $body.FontSize = 12
     $body.TextWrapping = 'Wrap'
     $body.Margin = '0,0,0,10'
@@ -7534,21 +7588,21 @@ function Show-SaveWizard {
 
     $lstSaves = New-Object System.Windows.Controls.ListBox
     $lstSaves.MaxHeight = 200
-    $lstSaves.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0d0d0d')
-    $lstSaves.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#eeeeee')
-    $lstSaves.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#333')
+    $lstSaves.Background = (New-SRBrush '#0d0d0d')
+    $lstSaves.Foreground = (New-SRBrush '#eeeeee')
+    $lstSaves.BorderBrush = (New-SRBrush '#333')
     $lstSaves.DisplayMemberPath = 'DisplayLine'
     $lstSaves.Visibility = 'Collapsed'
 
     $txtMods = New-Object System.Windows.Controls.TextBox
-    $txtMods.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#1a1a1a')
-    $txtMods.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#eeeeee')
+    $txtMods.Background = (New-SRBrush '#1a1a1a')
+    $txtMods.Foreground = (New-SRBrush '#eeeeee')
     $txtMods.Padding = '10,8'
-    $txtMods.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#333')
+    $txtMods.BorderBrush = (New-SRBrush '#333')
     $txtMods.Visibility = 'Collapsed'
 
     $txtSaveInfo = New-Object System.Windows.Controls.TextBlock
-    $txtSaveInfo.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#aaa')
+    $txtSaveInfo.Foreground = (New-SRBrush '#aaa')
     $txtSaveInfo.FontSize = 11
     $txtSaveInfo.TextWrapping = 'Wrap'
     $txtSaveInfo.Margin = '0,0,0,8'
@@ -7557,29 +7611,29 @@ function Show-SaveWizard {
 
     $chkWizardSkipIntro = New-Object System.Windows.Controls.CheckBox
     $chkWizardSkipIntro.Content = 'Preskoci Giants intro (-skipStartVideos pri pokretanju)'
-    $chkWizardSkipIntro.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#aaa')
+    $chkWizardSkipIntro.Foreground = (New-SRBrush '#aaa')
     $chkWizardSkipIntro.Margin = '0,0,0,8'
     $chkWizardSkipIntro.FontFamily = New-Object System.Windows.Media.FontFamily('Segoe UI')
     $chkWizardSkipIntro.Visibility = 'Collapsed'
 
     $lstProfiles = New-Object System.Windows.Controls.ListBox
     $lstProfiles.MaxHeight = 160
-    $lstProfiles.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#0d0d0d')
-    $lstProfiles.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#eeeeee')
-    $lstProfiles.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#333')
+    $lstProfiles.Background = (New-SRBrush '#0d0d0d')
+    $lstProfiles.Foreground = (New-SRBrush '#eeeeee')
+    $lstProfiles.BorderBrush = (New-SRBrush '#333')
     $lstProfiles.DisplayMemberPath = 'Label'
     $lstProfiles.Visibility = 'Collapsed'
 
     $chkBackup = New-Object System.Windows.Controls.CheckBox
     $chkBackup.Content = 'Napravi backup savegame foldera prije promjena (preporuceno)'
-    $chkBackup.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#aaa')
+    $chkBackup.Foreground = (New-SRBrush '#aaa')
     $chkBackup.IsChecked = $true
     $chkBackup.Visibility = 'Collapsed'
     $chkBackup.Margin = '0,0,0,8'
     $chkBackup.FontFamily = New-Object System.Windows.Media.FontFamily('Segoe UI')
 
     $txtSummary = New-Object System.Windows.Controls.TextBlock
-    $txtSummary.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#bbb')
+    $txtSummary.Foreground = (New-SRBrush '#bbb')
     $txtSummary.FontSize = 11
     $txtSummary.TextWrapping = 'Wrap'
     $txtSummary.FontFamily = New-Object System.Windows.Media.FontFamily('Segoe UI')
@@ -7602,8 +7656,8 @@ function Show-SaveWizard {
     $btnCancel.Padding = '14,8'
     $btnCancel.Margin = '0,0,8,0'
     $btnCancel.Cursor = 'Hand'
-    $btnCancel.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#222')
-    $btnCancel.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#cccccc')
+    $btnCancel.Background = (New-SRBrush '#222')
+    $btnCancel.Foreground = (New-SRBrush '#cccccc')
     $btnCancel.BorderThickness = '0'
 
     $btnBrowseMods = New-Object System.Windows.Controls.Button
@@ -7611,8 +7665,8 @@ function Show-SaveWizard {
     $btnBrowseMods.Padding = '12,8'
     $btnBrowseMods.Margin = '0,0,0,8'
     $btnBrowseMods.Cursor = 'Hand'
-    $btnBrowseMods.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#222')
-    $btnBrowseMods.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#cccccc')
+    $btnBrowseMods.Background = (New-SRBrush '#222')
+    $btnBrowseMods.Foreground = (New-SRBrush '#cccccc')
     $btnBrowseMods.BorderThickness = '0'
     $btnBrowseMods.HorizontalAlignment = 'Left'
     $btnBrowseMods.Visibility = 'Collapsed'
@@ -7622,8 +7676,8 @@ function Show-SaveWizard {
     $btnBack.Padding = '14,8'
     $btnBack.Margin = '0,0,8,0'
     $btnBack.Cursor = 'Hand'
-    $btnBack.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#222')
-    $btnBack.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#cccccc')
+    $btnBack.Background = (New-SRBrush '#222')
+    $btnBack.Foreground = (New-SRBrush '#cccccc')
     $btnBack.BorderThickness = '0'
     $btnBack.Visibility = 'Collapsed'
 
@@ -7631,8 +7685,8 @@ function Show-SaveWizard {
     $btnNext.Content = 'Dalje'
     $btnNext.Padding = '18,8'
     $btnNext.Cursor = 'Hand'
-    $btnNext.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F5C518')
-    $btnNext.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#111')
+    $btnNext.Background = (New-SRBrush '#F5C518')
+    $btnNext.Foreground = (New-SRBrush '#111')
     $btnNext.FontWeight = 'Bold'
     $btnNext.BorderThickness = '0'
 
@@ -7905,7 +7959,7 @@ function Update-ServerButtons {
         $tb = New-Object System.Windows.Controls.TextBlock
         $tb.Text = $srv.name
         $tb.FontSize = 11
-        $tb.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+        $tb.FontFamily = (New-SRFontFamily)
         $tb.IsHitTestVisible = $false
         $tb.VerticalAlignment = "Center"
         $tb.TextTrimming = "CharacterEllipsis"
@@ -7916,12 +7970,12 @@ function Update-ServerButtons {
             $badge.Padding = "4,1"
             $badge.Margin = "6,0,0,0"
             $badge.VerticalAlignment = "Center"
-            $badge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2a2a2a")
+            $badge.Background = (New-SRBrush "#2a2a2a")
             $bt = New-Object System.Windows.Controls.TextBlock
             $bt.Text = "MOJ"
             $bt.FontSize = 8
             $bt.FontWeight = "Bold"
-            $bt.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#999")
+            $bt.Foreground = (New-SRBrush "#999")
             $bt.IsHitTestVisible = $false
             $badge.Child = $bt
             $sp.Children.Add($badge) | Out-Null
@@ -7935,30 +7989,30 @@ function Update-ServerButtons {
         $pingMs = $script:ServerPings[$pingKey]
         if ($pingMs -is [int] -and $pingMs -ge 0) {
             $pingTb.Text = "$pingMs ms"
-            if ($pingMs -lt 60)        { $pingTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30A46C") }
-            elseif ($pingMs -lt 150)   { $pingTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518") }
-            else                        { $pingTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E5484D") }
+            if ($pingMs -lt 60)        { $pingTb.Foreground = (New-SRBrush "#30A46C") }
+            elseif ($pingMs -lt 150)   { $pingTb.Foreground = (New-SRBrush "#F5C518") }
+            else                        { $pingTb.Foreground = (New-SRBrush "#E5484D") }
         } elseif ($pingMs -eq -1) {
             $pingTb.Text = "X"
-            $pingTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E5484D")
+            $pingTb.Foreground = (New-SRBrush "#E5484D")
         } else {
             $pingTb.Text = "..."
-            $pingTb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#555")
+            $pingTb.Foreground = (New-SRBrush "#555")
         }
         $pingTb.FontSize = 9
-        $pingTb.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+        $pingTb.FontFamily = (New-SRFontFamily)
         $pingTb.VerticalAlignment = "Center"
         $pingTb.IsHitTestVisible = $false
         [System.Windows.Controls.Grid]::SetColumn($pingTb, 1)
         $grid.Children.Add($pingTb) | Out-Null
 
         if ($isActive) {
-            $bd.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
-            $tb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#111")
+            $bd.Background = (New-SRBrush "#F5C518")
+            $tb.Foreground = (New-SRBrush "#111")
             $tb.FontWeight = "SemiBold"
         } else {
-            $bd.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1a1a1a")
-            $tb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#ccc")
+            $bd.Background = (New-SRBrush "#1a1a1a")
+            $tb.Foreground = (New-SRBrush "#ccc")
             $tb.FontWeight = "Normal"
         }
 
@@ -8207,8 +8261,8 @@ function Apply-ModFilter {
 function Refresh-ServerStatus {
     param([switch]$Silent, $PreloadedStatus)
     $status = if ($PreloadedStatus) { $PreloadedStatus } else { Get-ServerStatus }
-    $green = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30A46C")
-    $red   = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E5484D")
+    $green = (New-SRBrush "#30A46C")
+    $red   = (New-SRBrush "#E5484D")
 
     if ($status.online) {
         $statusDot.Fill = $green
@@ -8282,10 +8336,10 @@ function Refresh-ServerStatus {
             if ($p -ne $null -and $p -ge 0) {
                 $txtServerPing.Text = "$p ms"
                 $col = if ($p -lt 60) { "#30A46C" } elseif ($p -lt 150) { "#F5C518" } else { "#E5484D" }
-                $txtServerPing.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($col)
+                $txtServerPing.Foreground = (New-SRBrush $col)
             } else {
                 $txtServerPing.Text = "-"
-                $txtServerPing.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#666")
+                $txtServerPing.Foreground = (New-SRBrush "#666")
             }
         } catch {}
     }
@@ -8607,7 +8661,7 @@ function Load-ServerToForm {
 function Enable-AdminMode {
     $script:IsAdmin = $true
     $btnAdminToggle.Content = "Admin"
-    $btnAdminToggle.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
+    $btnAdminToggle.Foreground = (New-SRBrush "#F5C518")
     $adminPanel.Visibility = "Visible"
     if ($navLog) { $navLog.Visibility = "Visible" }
     Load-ServerToForm
@@ -8617,7 +8671,7 @@ function Enable-AdminMode {
 function Disable-AdminMode {
     $script:IsAdmin = $false
     $btnAdminToggle.Content = "Igrac"
-    $btnAdminToggle.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#555")
+    $btnAdminToggle.Foreground = (New-SRBrush "#555")
     $adminPanel.Visibility = "Collapsed"
     if ($navLog) {
         $navLog.Visibility = "Collapsed"
@@ -9203,8 +9257,8 @@ function Show-Toast {
     $bd.CornerRadius = "8"
     $bd.Padding = "14,10"
     $bd.Margin = "0,0,0,8"
-    $bd.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString($c.bg)
-    $bd.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString($c.accent)
+    $bd.Background = (New-SRBrush $c.bg)
+    $bd.BorderBrush = (New-SRBrush $c.accent)
     $bd.BorderThickness = "1"
     $bd.MinWidth = 220
     $bd.MaxWidth = 360
@@ -9212,9 +9266,9 @@ function Show-Toast {
     $bd.IsHitTestVisible = $true
     $tb = New-Object System.Windows.Controls.TextBlock
     $tb.Text = $Message
-    $tb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($c.fg)
+    $tb.Foreground = (New-SRBrush $c.fg)
     $tb.FontSize = 12
-    $tb.FontFamily = New-Object System.Windows.Media.FontFamily("Segoe UI")
+    $tb.FontFamily = (New-SRFontFamily)
     $tb.TextWrapping = "Wrap"
     $bd.Child = $tb
     $toastHost.Children.Add($bd) | Out-Null
@@ -10132,15 +10186,8 @@ function Show-LicenseWindow {
             $btnT.IsEnabled = $false; $btnT.Content = "Generirana"
         } catch {
             $msg = $_.Exception.Message
-            try {
-                $stream = $_.Exception.Response.GetResponseStream()
-                if ($stream) {
-                    $reader2 = New-Object System.IO.StreamReader($stream)
-                    $errBody = $reader2.ReadToEnd()
-                    $errObj = $errBody | ConvertFrom-Json -ErrorAction Stop
-                    if ($errObj.reason) { $msg = [string]$errObj.reason }
-                }
-            } catch {}
+            $errObj = Read-HttpErrorBody -Exception $_.Exception
+            if ($errObj -and $errObj.reason) { $msg = [string]$errObj.reason }
             $err.Text = "Greska: $msg"
             $err.Visibility = "Visible"
             $btnT.IsEnabled = $true; $btnT.Content = "Probna licenca (3 dana)"
@@ -10177,15 +10224,7 @@ function Show-LicenseWindow {
             }
             # Save cache
             try {
-                $cache = @{
-                    key = $script:_pendingKey
-                    keyHash = (Get-SHA256 $script:_pendingKey)
-                    hwid = $script:_pendingHwid
-                    expiresAt = $r.entry.expiresAt
-                    discordId = [string]$r.entry.discordId
-                    permanent = [bool]$r.entry.permanent
-                    lastCheck = (Get-Date).ToUniversalTime().ToString("o")
-                }
+                $cache = New-LicenseCacheEntry -Key $script:_pendingKey -Hwid $script:_pendingHwid -Entry $r.entry
                 Save-LicenseCache $cache | Out-Null
             } catch {
                 $script:_licErr.Text = "Greska kod spremanja: $($_.Exception.Message)"
@@ -10221,15 +10260,7 @@ function Ensure-LicenseValid {
     if ($key) {
         $r = Test-License -key $key -hwid $hwid
         if ($r.ok) {
-            $newCache = @{
-                key = $key
-                keyHash = (Get-SHA256 $key)
-                hwid = $hwid
-                expiresAt = $r.entry.expiresAt
-                discordId = [string]$r.entry.discordId
-                permanent = [bool]$r.entry.permanent
-                lastCheck = (Get-Date).ToUniversalTime().ToString("o")
-            }
+            $newCache = New-LicenseCacheEntry -Key $key -Hwid $hwid -Entry $r.entry
             Save-LicenseCache $newCache | Out-Null
             $script:CurrentLicenseKey = $key
             return $true
