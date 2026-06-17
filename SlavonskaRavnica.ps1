@@ -5,10 +5,13 @@
 # GitHub Auto-Update | Multi-Server | Admin/Player | Mod Sync
 # ============================================================
 
-# Dijagnosticki boot log — pokrece se ODMAH na pocetku skripte za pracenje di se zaglavi
+# Dijagnosticki boot log — PowerShell cmdleti umjesto .NET metoda (Controlled Folder Access kompatibilnost)
 $script:BootLogPath = Join-Path $PSScriptRoot "sr_boot.log"
-function Write-BootLog { param([string]$Msg) try { [System.IO.File]::AppendAllText($script:BootLogPath, "$(Get-Date -f 'HH:mm:ss.fff') $Msg`r`n") } catch {} }
-try { [System.IO.File]::WriteAllText($script:BootLogPath, "=== SR Manager Boot $(Get-Date -f 'yyyy-MM-dd HH:mm:ss') ===`r`n") } catch {}
+function Write-BootLog {
+    param([string]$Msg)
+    try { "$(Get-Date -f 'HH:mm:ss.fff') $Msg" | Add-Content -LiteralPath $script:BootLogPath -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+}
+try { "=== SR Manager Boot $(Get-Date -f 'yyyy-MM-dd HH:mm:ss') ===" | Set-Content -LiteralPath $script:BootLogPath -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
 Write-BootLog "START: Script poceo"
 
 # TEST-POKRENI.bat postavlja SR_MANAGER_TEST=1 - ne skrivaj konzolu (dijagnostika)
@@ -3438,15 +3441,22 @@ function Set-SplashStep {
     Invoke-SplashPump
 }
 
-# WPF default ShutdownMode=OnLastWindowClose gasi proces kad se splash zatvori
-# prije ShowDialog glavnog prozora (regresija nakon v2.3 splash flowa).
+# WPF default ShutdownMode=OnLastWindowClose gasi proces kad se splash zatvori.
+# PowerShell NE kreira Application objekt automatski — moramo ga sami kreirati.
 function Initialize-WpfApplicationLifecycle {
     try {
         $app = [System.Windows.Application]::Current
-        if ($app) {
+        if (-not $app) {
+            Write-BootLog "WARN: Application.Current je null — kreiram novi Application objekt"
+            $app = New-Object System.Windows.Application
+            $app.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
+        } else {
             $app.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
         }
-    } catch {}
+        Write-BootLog "OK: ShutdownMode = OnExplicitShutdown"
+    } catch {
+        Write-BootLog "WARN: Initialize-WpfApplicationLifecycle greska: $($_.Exception.Message)"
+    }
 }
 
 function Close-StartupSplash {
@@ -3467,7 +3477,8 @@ $script:PreloadedLocalModCount = $null
 # ============================================================
 # XAML UI
 # ============================================================
-Write-BootLog "START: XAML parse ([xml] cast — 230K chars)"
+Write-BootLog "START: XAML parse ([xml] cast)"
+try {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -6520,8 +6531,15 @@ Write-BootLog "START: XAML parse ([xml] cast — 230K chars)"
     </Border>
 </Window>
 "@
-
 Write-BootLog "OK: XAML parsed"
+} catch {
+    $errMsg = "XAML [xml] cast greska: $($_.Exception.Message)"
+    Write-BootLog "FAIL: $errMsg"
+    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 } catch {}
+    try { Close-StartupSplash } catch {}
+    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Greska", "OK", "Error") | Out-Null
+    return
+}
 
 # ============================================================
 # CREATE WINDOW (splash ostaje otvoren do licence + preloada)
@@ -6550,7 +6568,7 @@ Set-SplashStep "Ucitavam sucelje..." 28
 # Trap za hvatanje neobradjenih gresaka nakon XAML ucitavanja
 trap {
     $errMsg = "PAD LAUNCHERA: $($_.Exception.ToString())`n`nLinija: $($_.InvocationInfo.ScriptLineNumber)"
-    try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "sr_crash.log"), $errMsg) } catch {}
+    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
     try { Close-StartupSplash } catch {}
     try { [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Greska", "OK", "Error") } catch {}
     break
@@ -6561,7 +6579,7 @@ try {
     $window = [Windows.Markup.XamlReader]::Load($reader)
 } catch {
     $errMsg = "XAML GRESKA: $($_.Exception.ToString())"
-    try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "sr_crash.log"), $errMsg) } catch {}
+    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
     try { Close-StartupSplash } catch {}
     [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Greska", "OK", "Error") | Out-Null
     return
@@ -6569,7 +6587,7 @@ try {
 if (-not $window) {
     $errMsg = "XAML ucitavanje neuspjesno — window objekt je null."
     Write-BootLog "FAIL: $errMsg"
-    try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "sr_crash.log"), $errMsg) } catch {}
+    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
     try { Close-StartupSplash } catch {}
     [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Error", "OK", "Error") | Out-Null
     return
@@ -10380,7 +10398,7 @@ try {
             param($s, $e)
             try { Write-Log "WPF UNHANDLED: $($e.Exception.ToString())" } catch {}
             try { Write-BootLog "WPF UNHANDLED: $($e.Exception.Message)" } catch {}
-            try { [System.IO.File]::AppendAllText((Join-Path $PSScriptRoot "sr_crash.log"), "WPF UNHANDLED: $($e.Exception.ToString())`r`n") } catch {}
+            try { "WPF UNHANDLED: $($e.Exception.ToString())" | Add-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
             $e.Handled = $true
         })
     }
@@ -10397,7 +10415,7 @@ try {
     try { Close-StartupSplash } catch {}
     $errMsg = "Greska pri otvaranju prozora: $($_.Exception.ToString())"
     Write-BootLog "FAIL: $errMsg"
-    try { [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "sr_crash.log"), $errMsg) } catch {}
+    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
     [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Error", "OK", "Error") | Out-Null
     return
 }
