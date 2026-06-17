@@ -5,6 +5,12 @@
 # GitHub Auto-Update | Multi-Server | Admin/Player | Mod Sync
 # ============================================================
 
+# Dijagnosticki boot log — pokrece se ODMAH na pocetku skripte za pracenje di se zaglavi
+$script:BootLogPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Definition) "sr_boot.log"
+function Write-BootLog { param([string]$Msg) try { [System.IO.File]::AppendAllText($script:BootLogPath, "$(Get-Date -f 'HH:mm:ss.fff') $Msg`r`n") } catch {} }
+try { [System.IO.File]::WriteAllText($script:BootLogPath, "=== SR Manager Boot $(Get-Date -f 'yyyy-MM-dd HH:mm:ss') ===`r`n") } catch {}
+Write-BootLog "START: Script poceo"
+
 # TEST-POKRENI.bat postavlja SR_MANAGER_TEST=1 - ne skrivaj konzolu (dijagnostika)
 $script:IsTestLaunch = ($env:SR_MANAGER_TEST -eq '1')
 
@@ -20,10 +26,12 @@ if (-not $script:IsTestLaunch) { try {
     if ($hw -ne [IntPtr]::Zero) { [HideConsole.W32]::ShowWindow($hw, 0) | Out-Null }
 } catch {} }
 
+Write-BootLog "START: Add-Type assemblies"
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Windows.Forms
+Write-BootLog "OK: Assemblies loaded"
 
 # Globalni exception handleri — sprijecavaju tiho gasenje aplikacije
 try {
@@ -62,7 +70,9 @@ function Close-EarlySplash {
         }
     } catch {}
 }
+Write-BootLog "START: EarlySplash"
 Show-EarlySplash
+Write-BootLog "OK: EarlySplash shown"
 
 # Postavi AppUserModelID za taskbar (da ne pokazuje PowerShell ikonu)
 try {
@@ -73,6 +83,7 @@ try {
     [SRManager.AppId]::SetCurrentProcessExplicitAppUserModelID("SRManager.SlavonskaRavnica.1.0") | Out-Null
 } catch {}
 
+Write-BootLog "START: Constants + function definitions"
 # ============================================================
 # CONSTANTS
 # ============================================================
@@ -3456,6 +3467,7 @@ $script:PreloadedLocalModCount = $null
 # ============================================================
 # XAML UI
 # ============================================================
+Write-BootLog "START: XAML parse ([xml] cast — 230K chars)"
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -6509,14 +6521,20 @@ $script:PreloadedLocalModCount = $null
 </Window>
 "@
 
+Write-BootLog "OK: XAML parsed"
+
 # ============================================================
 # CREATE WINDOW (splash ostaje otvoren do licence + preloada)
 # ============================================================
+Write-BootLog "START: Show-SplashScreen"
 $splashWin = Show-SplashScreen
 $splashWin.Show()
+Write-BootLog "OK: WPF Splash shown"
 Set-SplashStep "Ucitavam konfiguraciju..." 10
 try { Initialize-LauncherConfig } catch {}
+Write-BootLog "OK: Config loaded"
 try { Sync-SharedConfig } catch {}
+Write-BootLog "OK: SharedConfig synced"
 try {
     Ensure-ServerMpFolder | Out-Null
     $preloadMods = Get-EffectiveModsPath
@@ -6527,12 +6545,7 @@ try {
     }
 } catch {}
 
-# Dijagnosticki log — svaki korak se zapisuje u sr_boot.log da znamo di se zaglavi
-$script:BootLogPath = Join-Path $PSScriptRoot "sr_boot.log"
-function Write-BootLog { param([string]$Msg) try { [System.IO.File]::AppendAllText($script:BootLogPath, "$(Get-Date -f 'HH:mm:ss.fff') $Msg`r`n") } catch {} }
-try { [System.IO.File]::WriteAllText($script:BootLogPath, "=== SR Manager Boot $(Get-Date -f 'yyyy-MM-dd HH:mm:ss') ===`r`n") } catch {}
-
-Write-BootLog "START: Ucitavam sucelje (XAML parse)"
+Write-BootLog "OK: Pre-XAML preload done"
 Set-SplashStep "Ucitavam sucelje..." 28
 # Trap za hvatanje neobradjenih gresaka nakon XAML ucitavanja
 trap {
@@ -6542,6 +6555,7 @@ trap {
     try { [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Greska", "OK", "Error") } catch {}
     break
 }
+Write-BootLog "START: XamlReader.Load"
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 try {
     $window = [Windows.Markup.XamlReader]::Load($reader)
@@ -6584,6 +6598,7 @@ try {
     }
 } catch {}
 
+Write-BootLog "START: FindName bindings"
 $titleBar            = $window.FindName("titleBar")
 $btnFullscreen       = $window.FindName("btnFullscreen")
 $btnMinimize         = $window.FindName("btnMinimize")
@@ -6805,6 +6820,7 @@ try {
     if (-not $logoLoaded) { $imgLogo.Visibility = "Collapsed" }
 } catch { $imgLogo.Visibility = "Collapsed" }
 
+Write-BootLog "OK: FindName done, starting event handlers"
 # ============================================================
 # WINDOW CHROME
 # ============================================================
