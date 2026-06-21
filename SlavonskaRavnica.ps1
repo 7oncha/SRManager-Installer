@@ -5,7 +5,7 @@
 # GitHub Auto-Update | Multi-Server | Admin/Player | Mod Sync
 # ============================================================
 
-# Dijagnosticki boot log — PowerShell cmdleti umjesto .NET metoda (Controlled Folder Access kompatibilnost)
+# Dijagnosticki boot log
 $script:BootLogPath = Join-Path $PSScriptRoot "sr_boot.log"
 function Write-BootLog {
     param([string]$Msg)
@@ -29,12 +29,10 @@ if (-not $script:IsTestLaunch) { try {
     if ($hw -ne [IntPtr]::Zero) { [HideConsole.W32]::ShowWindow($hw, 0) | Out-Null }
 } catch {} }
 
-Write-BootLog "START: Add-Type assemblies"
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Windows.Forms
-Write-BootLog "OK: Assemblies loaded"
 
 # Globalni exception handleri — sprijecavaju tiho gasenje aplikacije
 try {
@@ -73,9 +71,7 @@ function Close-EarlySplash {
         }
     } catch {}
 }
-Write-BootLog "START: EarlySplash"
 Show-EarlySplash
-Write-BootLog "OK: EarlySplash shown"
 
 # Postavi AppUserModelID za taskbar (da ne pokazuje PowerShell ikonu)
 try {
@@ -86,7 +82,6 @@ try {
     [SRManager.AppId]::SetCurrentProcessExplicitAppUserModelID("SRManager.SlavonskaRavnica.1.0") | Out-Null
 } catch {}
 
-Write-BootLog "START: Constants + function definitions"
 # ============================================================
 # CONSTANTS
 # ============================================================
@@ -1378,37 +1373,6 @@ function Get-ModThumbnailCachePath {
     } catch { return $null }
 }
 
-function Decode-DXT1Block {
-    # Dekodira jedan 4x4 DXT1 blok (8 bajtova) u RGBA piksele
-    param([byte[]]$Bytes, [int]$Pos, [byte[]]$Rgba, [int]$W, [int]$H, [int]$BX, [int]$BY)
-    $c0 = [BitConverter]::ToUInt16($Bytes, $Pos)
-    $c1 = [BitConverter]::ToUInt16($Bytes, $Pos + 2)
-    $bits = [BitConverter]::ToUInt32($Bytes, $Pos + 4)
-    $pal = New-Object uint32[] 4
-    $pal[0] = Convert-Rgb565ToArgb $c0 255
-    $pal[1] = Convert-Rgb565ToArgb $c1 255
-    if ($c0 -gt $c1) {
-        $pal[2] = Convert-Rgb565ToArgb ([uint16]([int]($c0 * 2 + $c1) / 3)) 255
-        $pal[3] = Convert-Rgb565ToArgb ([uint16]([int]($c0 + $c1 * 2) / 3)) 255
-    } else {
-        $pal[2] = Convert-Rgb565ToArgb ([uint16](([int]$c0 + [int]$c1) / 2)) 255
-        $pal[3] = 0
-    }
-    for ($py = 0; $py -lt 4; $py++) {
-        for ($px = 0; $px -lt 4; $px++) {
-            $x = $BX * 4 + $px; $y = $BY * 4 + $py
-            if ($x -ge $W -or $y -ge $H) { continue }
-            $idx = [int](($bits -shr (2 * ($py * 4 + $px))) -band 3)
-            $c = $pal[$idx]
-            $o = ($y * $W + $x) * 4
-            $Rgba[$o]     = [byte]($c -band 0xFF)
-            $Rgba[$o + 1] = [byte](($c -shr 8) -band 0xFF)
-            $Rgba[$o + 2] = [byte](($c -shr 16) -band 0xFF)
-            $Rgba[$o + 3] = [byte](($c -shr 24) -band 0xFF)
-        }
-    }
-}
-
 function Convert-DdsBytesToPngFile {
     param([byte[]]$Bytes, [string]$OutPath)
     if (-not $Bytes -or $Bytes.Length -lt 128) { return $false }
@@ -1419,101 +1383,40 @@ function Convert-DdsBytesToPngFile {
         if ($w -le 0 -or $h -le 0 -or $w -gt 2048 -or $h -gt 2048) { return $false }
         $pf = [BitConverter]::ToUInt32($Bytes, 84)
         $dataOff = 128
-        # DX10 extended header — dodaje 20 bajtova iza standardnog headera
-        if ($pf -eq 0x30315844) {
-            if ($Bytes.Length -lt 148) { return $false }
-            $dxgiFormat = [BitConverter]::ToUInt32($Bytes, 128)
-            $dataOff = 148
-            # Mapiraj DXGI format na interni codec
-            if ($dxgiFormat -eq 71 -or $dxgiFormat -eq 72) { $pf = 0x31545844 }      # BC1 = DXT1
-            elseif ($dxgiFormat -eq 74 -or $dxgiFormat -eq 75) { $pf = 0x33545844 }  # BC2 = DXT3
-            elseif ($dxgiFormat -eq 77 -or $dxgiFormat -eq 78) { $pf = 0x35545844 }  # BC3 = DXT5
-            elseif ($dxgiFormat -eq 98 -or $dxgiFormat -eq 99) { $pf = 0xBC7 }       # BC7
-            else { return $false }
-        }
         if ($Bytes.Length -lt ($dataOff + 8)) { return $false }
         $rgba = New-Object byte[] ($w * $h * 4)
-        $blocksX = [Math]::Max(1, [int][Math]::Ceiling($w / 4.0))
-        $blocksY = [Math]::Max(1, [int][Math]::Ceiling($h / 4.0))
         if ($pf -eq 0x31545844) {
-            # DXT1 (BC1) — 8 bajtova po bloku
+            # DXT1
+            $blocksX = [Math]::Max(1, [int][Math]::Ceiling($w / 4.0))
+            $blocksY = [Math]::Max(1, [int][Math]::Ceiling($h / 4.0))
             $pos = $dataOff
             for ($by = 0; $by -lt $blocksY; $by++) {
                 for ($bx = 0; $bx -lt $blocksX; $bx++) {
                     if ($pos + 8 -gt $Bytes.Length) { return $false }
-                    Decode-DXT1Block -Bytes $Bytes -Pos $pos -Rgba $rgba -W $w -H $h -BX $bx -BY $by
-                    $pos += 8
-                }
-            }
-        } elseif ($pf -eq 0x33545844) {
-            # DXT3 (BC2) — 16 bajtova po bloku (8 alpha + 8 color)
-            $pos = $dataOff
-            for ($by = 0; $by -lt $blocksY; $by++) {
-                for ($bx = 0; $bx -lt $blocksX; $bx++) {
-                    if ($pos + 16 -gt $Bytes.Length) { return $false }
-                    # Alpha blok: 8 bajtova = 16 piksela x 4 bita
-                    $alphaBlock = New-Object byte[] 16
-                    for ($i = 0; $i -lt 8; $i++) {
-                        $ab = $Bytes[$pos + $i]
-                        $alphaBlock[$i * 2]     = [byte](($ab -band 0x0F) * 17)
-                        $alphaBlock[$i * 2 + 1] = [byte]((($ab -shr 4) -band 0x0F) * 17)
-                    }
-                    # Color blok (isti kao DXT1 ali bez 1-bit alpha)
-                    Decode-DXT1Block -Bytes $Bytes -Pos ($pos + 8) -Rgba $rgba -W $w -H $h -BX $bx -BY $by
-                    # Primijeni eksplicitnu alphu
+                    $c0 = [BitConverter]::ToUInt16($Bytes, $pos); $pos += 2
+                    $c1 = [BitConverter]::ToUInt16($Bytes, $pos); $pos += 2
+                    $bits = [BitConverter]::ToUInt32($Bytes, $pos); $pos += 4
+                    $pal = New-Object uint32[] 4
+                    $pal[0] = Convert-Rgb565ToArgb $c0 255
+                    $pal[1] = Convert-Rgb565ToArgb $c1 255
+                    $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255
+                    $pal[3] = 0
+                    if ($c0 -le $c1) { $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255; $pal[3] = 0 }
                     for ($py = 0; $py -lt 4; $py++) {
                         for ($px = 0; $px -lt 4; $px++) {
                             $x = $bx * 4 + $px; $y = $by * 4 + $py
                             if ($x -ge $w -or $y -ge $h) { continue }
-                            $o = ($y * $w + $x) * 4 + 3
-                            $Rgba[$o] = $alphaBlock[$py * 4 + $px]
+                            $idx = [int](($bits -shr (2 * ($py * 4 + $px))) -band 3)
+                            $c = $pal[$idx]
+                            $o = ($y * $w + $x) * 4
+                            $rgba[$o]     = [byte]($c -band 0xFF)
+                            $rgba[$o + 1] = [byte](($c -shr 8) -band 0xFF)
+                            $rgba[$o + 2] = [byte](($c -shr 16) -band 0xFF)
+                            $rgba[$o + 3] = if ($idx -eq 3 -and $c0 -gt $c1) { 0 } else { 255 }
                         }
                     }
-                    $pos += 16
                 }
             }
-        } elseif ($pf -eq 0x35545844) {
-            # DXT5 (BC3) — 16 bajtova po bloku (8 alpha interpolated + 8 color)
-            $pos = $dataOff
-            for ($by = 0; $by -lt $blocksY; $by++) {
-                for ($bx = 0; $bx -lt $blocksX; $bx++) {
-                    if ($pos + 16 -gt $Bytes.Length) { return $false }
-                    # Alpha blok: 2 referentne vrijednosti + 6 bajtova 3-bitnih indeksa
-                    $a0 = [int]$Bytes[$pos]; $a1 = [int]$Bytes[$pos + 1]
-                    # Citaj 48 bita (6 bajtova) za alpha indekse
-                    $alphaBits = [uint64]0
-                    for ($i = 0; $i -lt 6; $i++) {
-                        $alphaBits = $alphaBits -bor ([uint64]$Bytes[$pos + 2 + $i] -shl ($i * 8))
-                    }
-                    # Izracunaj alpha paletu (8 vrijednosti)
-                    $aPal = New-Object int[] 8
-                    $aPal[0] = $a0; $aPal[1] = $a1
-                    if ($a0 -gt $a1) {
-                        for ($i = 1; $i -le 6; $i++) { $aPal[$i + 1] = [int](((6 - $i) * $a0 + $i * $a1 + 3) / 7) }
-                    } else {
-                        for ($i = 1; $i -le 4; $i++) { $aPal[$i + 1] = [int](((4 - $i) * $a0 + $i * $a1 + 2) / 5) }
-                        $aPal[6] = 0; $aPal[7] = 255
-                    }
-                    # Color blok
-                    Decode-DXT1Block -Bytes $Bytes -Pos ($pos + 8) -Rgba $rgba -W $w -H $h -BX $bx -BY $by
-                    # Primijeni interpoliranu alphu
-                    for ($py = 0; $py -lt 4; $py++) {
-                        for ($px = 0; $px -lt 4; $px++) {
-                            $x = $bx * 4 + $px; $y = $by * 4 + $py
-                            if ($x -ge $w -or $y -ge $h) { continue }
-                            $pixIdx = $py * 4 + $px
-                            $aIdx = [int](($alphaBits -shr ($pixIdx * 3)) -band 7)
-                            $o = ($y * $w + $x) * 4 + 3
-                            $Rgba[$o] = [byte]$aPal[$aIdx]
-                        }
-                    }
-                    $pos += 16
-                }
-            }
-        } elseif ($pf -eq 0xBC7) {
-            # BC7 — kompleksan format, fallback: citaj samo prva 2 bita po bloku za boje
-            # BC7 je pretezak za PS dekoder; vrati false i koristi fallback icon
-            return $false
         } elseif ($pf -eq 0x20534444) {
             # Uncompressed 32-bit (rare)
             $need = $dataOff + ($w * $h * 4)
@@ -1538,43 +1441,20 @@ function Convert-Rgb565ToArgb {
 
 function Save-RgbaBitmapAsPng {
     param([byte[]]$Rgba, [int]$Width, [int]$Height, [string]$OutPath)
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    $bmp = New-Object System.Drawing.Bitmap $Width, $Height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $bd = $bmp.LockBits([System.Drawing.Rectangle]::FromLTRB(0, 0, $Width, $Height),
+        [System.Drawing.Imaging.ImageLockMode]::WriteOnly,
+        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        [System.Runtime.InteropServices.Marshal]::Copy($Rgba, 0, $bd.Scan0, $Rgba.Length)
+    } finally {
+        $bmp.UnlockBits($bd)
+    }
     $dir = Split-Path $OutPath -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    # Koristimo WPF WriteableBitmap umjesto System.Drawing (pouzdanije na Windows)
-    try {
-        # RGBA → BGRA konverzija (WPF ocekuje Bgra32)
-        $bgra = New-Object byte[] $Rgba.Length
-        for ($i = 0; $i -lt $Rgba.Length; $i += 4) {
-            $bgra[$i]     = $Rgba[$i + 2]  # B
-            $bgra[$i + 1] = $Rgba[$i + 1]  # G
-            $bgra[$i + 2] = $Rgba[$i]      # R
-            $bgra[$i + 3] = $Rgba[$i + 3]  # A
-        }
-        $wb = New-Object System.Windows.Media.Imaging.WriteableBitmap(
-            $Width, $Height, 96, 96,
-            [System.Windows.Media.PixelFormats]::Bgra32, $null)
-        $wb.WritePixels(
-            (New-Object System.Windows.Int32Rect(0, 0, $Width, $Height)),
-            $bgra, ($Width * 4), 0)
-        $encoder = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
-        $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($wb))
-        $fs = [System.IO.File]::Create($OutPath)
-        try { $encoder.Save($fs) } finally { $fs.Dispose() }
-        return
-    } catch {}
-    # Fallback: System.Drawing (starije verzije)
-    try {
-        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
-        $bmp = New-Object System.Drawing.Bitmap $Width, $Height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-        $bd = $bmp.LockBits([System.Drawing.Rectangle]::FromLTRB(0, 0, $Width, $Height),
-            [System.Drawing.Imaging.ImageLockMode]::WriteOnly,
-            [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-        try {
-            [System.Runtime.InteropServices.Marshal]::Copy($Rgba, 0, $bd.Scan0, $Rgba.Length)
-        } finally { $bmp.UnlockBits($bd) }
-        $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
-        $bmp.Dispose()
-    } catch {}
+    $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
 }
 
 function Export-ModIconEntryToPng {
@@ -1640,38 +1520,14 @@ function Get-ModThumbnailFromZip {
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue | Out-Null
         $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
         try {
-            # 1. Pokusaj iz modDesc.xml → icon putanja
             $desc = Get-ModDescEntryFromZip -Zip $zip
-            if ($desc) {
-                $sr = New-Object System.IO.StreamReader($desc.Open())
-                try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
-                $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
-                $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
-                if ($iconEntry -and (Export-ModIconEntryToPng -Entry $iconEntry -OutPath $cache)) { return $cache }
-            }
-            # 2. Fallback: trazi poznate icon nazive (store_icon, icon, store)
-            $knownNames = @('icon.png','icon.jpg','store_icon.png','store.png','icon_store.png','thumbnail.png','thumb.png')
-            foreach ($kn in $knownNames) {
-                $found = $zip.Entries | Where-Object { $_.FullName -like "*/$kn" -or $_.Name -eq $kn } | Select-Object -First 1
-                if ($found -and $found.Length -gt 100) {
-                    if (Export-ModIconEntryToPng -Entry $found -OutPath $cache) { return $cache }
-                }
-            }
-            # 3. Fallback: bilo koja PNG/JPG slika u ZIP-u
-            foreach ($e in $zip.Entries) {
-                if ($e.Length -lt 100) { continue }
-                $fn = $e.FullName
-                if ($fn -match '\.(png|jpg|jpeg)$' -and $fn -notmatch '(?i)(readme|doc|license|__MACOSX)') {
-                    if (Export-ModIconEntryToPng -Entry $e -OutPath $cache) { return $cache }
-                }
-            }
-            # 4. Fallback: bilo koji ne-BC7 DDS (DXT1/DXT3/DXT5 mozemo dekodirati)
-            foreach ($e in $zip.Entries) {
-                if ($e.Length -lt 128) { continue }
-                if ($e.FullName -match '\.dds$') {
-                    if (Export-ModIconEntryToPng -Entry $e -OutPath $cache) { return $cache }
-                }
-            }
+            if (-not $desc) { return $null }
+            $sr = New-Object System.IO.StreamReader($desc.Open())
+            try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
+            $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
+            $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
+            if (-not $iconEntry) { return $null }
+            if (Export-ModIconEntryToPng -Entry $iconEntry -OutPath $cache) { return $cache }
         } finally {
             $zip.Dispose()
         }
@@ -1725,8 +1581,7 @@ function Start-ModThumbnailLoads {
     $script:ThumbTimer = New-Object System.Windows.Threading.DispatcherTimer
     $script:ThumbTimer.Interval = [TimeSpan]::FromMilliseconds(80)
     $script:ThumbTimer.Add_Tick({
-        $batch = 5
-        $changed = $false
+        $batch = 2
         while ($batch -gt 0 -and $script:ThumbQueue.Count -gt 0) {
             $batch--
             $it = $script:ThumbQueue.Dequeue()
@@ -1737,14 +1592,11 @@ function Start-ModThumbnailLoads {
                     if ($img) {
                         $it.ThumbSource = $img
                         $it.HasThumb = $true
-                        $changed = $true
                     }
                 }
             } catch {}
             $it.ThumbLoading = $false
         }
-        # Osvjezi WPF binding — PSCustomObject nema INotifyPropertyChanged
-        if ($changed -and $lstMods) { try { $lstMods.Items.Refresh() } catch {} }
         if ($script:ThumbQueue.Count -eq 0) { $script:ThumbTimer.Stop() }
     })
     $script:ThumbTimer.Start()
@@ -1765,31 +1617,25 @@ function Get-FS25UserDataPath {
 function Get-SavegameSlotInfo {
     param([string]$SlotDir, [int]$SlotNumber)
     $info = [PSCustomObject]@{
-        Slot          = $SlotNumber
-        SlotLabel     = "SLOT $SlotNumber"
-        Folder        = $SlotDir
-        Name          = "savegame$SlotNumber"
-        MapTitle      = ""
-        Money         = ""
-        MoneyLabel    = ""
-        PlayTime      = ""
-        PlayTimeLabel = ""
-        LastWrite     = ""
-        StatusLabel   = ""
-        HasCareer     = $false
-        SizeMb        = 0.0
-        IsEmpty       = $true
+        Slot       = $SlotNumber
+        Folder     = $SlotDir
+        Name       = "savegame$SlotNumber"
+        MapTitle   = ""
+        Money      = ""
+        PlayTime   = ""
+        LastWrite  = ""
+        HasCareer  = $false
+        SizeMb     = 0.0
     }
     try {
         $dirItem = Get-Item $SlotDir -ErrorAction SilentlyContinue
-        if ($dirItem) { $info.LastWrite = $dirItem.LastWriteTime.ToString("yyyy-MM-dd") }
+        if ($dirItem) { $info.LastWrite = $dirItem.LastWriteTime.ToString("dd.MM.yyyy HH:mm") }
         $total = (Get-ChildItem $SlotDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
         if ($total) { $info.SizeMb = [Math]::Round($total / 1MB, 1) }
     } catch {}
     $careerPath = Join-Path $SlotDir "careerSavegame.xml"
     if (Test-Path $careerPath) {
         $info.HasCareer = $true
-        $info.IsEmpty = $false
         try {
             $xml = Get-Content $careerPath -Raw -Encoding UTF8 -ErrorAction Stop
             if ($xml -match '<savegameName>([^<]*)</savegameName>') { $info.Name = $Matches[1].Trim() }
@@ -1800,27 +1646,10 @@ function Get-SavegameSlotInfo {
             if ($xml -match '<playTime>([^<]*)</playTime>') { $info.PlayTime = $Matches[1].Trim() }
         } catch {}
     }
-    if (-not $info.MapTitle -and -not $info.IsEmpty) {
+    if (-not $info.MapTitle) {
         foreach ($thumb in @('mapPreview.png', 'overview.png')) {
             if (Test-Path (Join-Path $SlotDir $thumb)) { $info.MapTitle = "(mapa)"; break }
         }
-    }
-    if ($info.IsEmpty) {
-        $info.Name = "Empty"
-        $info.StatusLabel = ""
-    } else {
-        $info.StatusLabel = "$($info.SizeMb) MB"
-    }
-    # Formatirani labeli za prikaz u kartici
-    if ($info.Money) {
-        try { $info.MoneyLabel = '$' + ([decimal]$info.Money).ToString('N0') } catch { $info.MoneyLabel = '$' + $info.Money }
-    }
-    if ($info.PlayTime) {
-        try {
-            $mins = [int]$info.PlayTime
-            $hrs = [Math]::Floor($mins / 60)
-            $info.PlayTimeLabel = "${hrs}h"
-        } catch { $info.PlayTimeLabel = $info.PlayTime }
     }
     return $info
 }
@@ -1833,14 +1662,6 @@ function Get-FS25SavegameList {
         $slotDir = Join-Path $root "savegame$_"
         if (Test-Path $slotDir) {
             [void]$list.Add((Get-SavegameSlotInfo -SlotDir $slotDir -SlotNumber $_))
-        } else {
-            # Prazan slot — prikazuje se sivo
-            [void]$list.Add([PSCustomObject]@{
-                Slot = $_; SlotLabel = "SLOT $_"; Folder = $slotDir
-                Name = "Empty"; MapTitle = ""; Money = ""; MoneyLabel = ""
-                PlayTime = ""; PlayTimeLabel = ""; LastWrite = ""; StatusLabel = ""
-                HasCareer = $false; SizeMb = 0.0; IsEmpty = $true
-            })
         }
     }
     return @($list.ToArray())
@@ -2045,24 +1866,19 @@ function Refresh-IgraPage {
     if (-not $txtIgraSavePath -or -not $lstSavegames) { return }
     $root = Get-FS25UserDataPath
     if ($root) {
-        $txtIgraSavePath.Text = "Odaberi save koji si vec kreirao u FS25."
-        $txtIgraSavePath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#888")
+        $txtIgraSavePath.Text = $root
+        $txtIgraSavePath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#aaa")
     } else {
-        $txtIgraSavePath.Text = 'FS25 user data nije pronaden. Pokreni FS25 i kreiraj barem jedan save.'
+        $txtIgraSavePath.Text = 'FS25 user data nije pronaden (My Games\FarmingSimulator2025)'
         $txtIgraSavePath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E5484D")
     }
     $lstSavegames.ItemsSource = $null
     $saves = Get-FS25SavegameList
     if ($saves.Count -gt 0) {
-        $filled = @($saves | Where-Object { -not $_.IsEmpty }).Count
         $lstSavegames.ItemsSource = $saves
-        if ($filled -gt 0) {
-            $txtIgraSaveHint.Text = "$filled save(s) pronadeno. Klikni na slot za nastavak."
-        } else {
-            $txtIgraSaveHint.Text = "Nema savegame foldera. Pokreni FS25, kreiraj save, pa se vrati ovdje."
-        }
+        $txtIgraSaveHint.Text = ('{0} slotova - samo pregled (Phase 1). Uredi save tek nakon backupa (kasnije).' -f $saves.Count)
     } else {
-        $txtIgraSaveHint.Text = "Nema savegame foldera. Pokreni FS25, kreiraj save, pa se vrati ovdje."
+        $txtIgraSaveHint.Text = "Nema savegame foldera. Spremi igru u FS25 pa osvjezi."
     }
 }
 
@@ -3316,7 +3132,7 @@ function Show-SplashScreen {
     $splash.WindowStyle = "None"
     $splash.AllowsTransparency = $true
     $splash.Background = [System.Windows.Media.Brushes]::Transparent
-    $splash.Width = 440; $splash.Height = 280
+    $splash.Width = 420; $splash.Height = 260
     $splash.WindowStartupLocation = "CenterScreen"
     $splash.ResizeMode = "NoResize"
     $splash.Topmost = $true
@@ -3328,13 +3144,6 @@ function Show-SplashScreen {
     $border.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
     $border.BorderThickness = "1"
     $border.Padding = "30,24"
-    # Glow efekt oko splash prozora
-    $splashGlow = New-Object System.Windows.Media.Effects.DropShadowEffect
-    $splashGlow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#F5C518")
-    $splashGlow.BlurRadius = 20
-    $splashGlow.ShadowDepth = 0
-    $splashGlow.Opacity = 0.3
-    $border.Effect = $splashGlow
 
     $sp = New-Object System.Windows.Controls.StackPanel
     $sp.VerticalAlignment = "Center"
@@ -3387,20 +3196,13 @@ function Show-SplashScreen {
 
     # Progress bar
     $progressBorder = New-Object System.Windows.Controls.Border
-    $progressBorder.Height = 6; $progressBorder.CornerRadius = "3"
-    $progressBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1a1a1a")
+    $progressBorder.Height = 4; $progressBorder.CornerRadius = "2"
+    $progressBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#222")
     $progressBorder.HorizontalAlignment = "Stretch"
     $progressGrid = New-Object System.Windows.Controls.Grid
     $progressFill = New-Object System.Windows.Controls.Border
-    $progressFill.Height = 6; $progressFill.CornerRadius = "3"
+    $progressFill.Height = 4; $progressFill.CornerRadius = "2"
     $progressFill.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F5C518")
-    # Glow na progress baru
-    $progressGlow = New-Object System.Windows.Media.Effects.DropShadowEffect
-    $progressGlow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#F5C518")
-    $progressGlow.BlurRadius = 8
-    $progressGlow.ShadowDepth = 0
-    $progressGlow.Opacity = 0.5
-    $progressFill.Effect = $progressGlow
     $progressFill.HorizontalAlignment = "Left"; $progressFill.Width = 0
     $progressGrid.Children.Add($progressFill) | Out-Null
     $progressBorder.Child = $progressGrid
@@ -3441,19 +3243,15 @@ function Set-SplashStep {
     Invoke-SplashPump
 }
 
-# Postavi ShutdownMode ako Application postoji (ne kreiraj novi — moze uzrokovati hang).
+# WPF default ShutdownMode=OnLastWindowClose gasi proces kad se splash zatvori
+# prije ShowDialog glavnog prozora (regresija nakon v2.3 splash flowa).
 function Initialize-WpfApplicationLifecycle {
     try {
         $app = [System.Windows.Application]::Current
         if ($app) {
             $app.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
-            Write-BootLog "OK: ShutdownMode = OnExplicitShutdown"
-        } else {
-            Write-BootLog "INFO: Application.Current je null — DispatcherFrame drzi proces"
         }
-    } catch {
-        Write-BootLog "WARN: Initialize-WpfApplicationLifecycle greska: $($_.Exception.Message)"
-    }
+    } catch {}
 }
 
 function Close-StartupSplash {
@@ -3474,8 +3272,6 @@ $script:PreloadedLocalModCount = $null
 # ============================================================
 # XAML UI
 # ============================================================
-Write-BootLog "START: XAML parse ([xml] cast)"
-try {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -3976,17 +3772,10 @@ try {
                                 <Setter TargetName="bd" Property="Background" Value="#F5C518"/>
                                 <Setter Property="Foreground" Value="#111"/>
                                 <Setter Property="FontWeight" Value="SemiBold"/>
-                                <Setter TargetName="bd" Property="BorderBrush" Value="#F5C518"/>
-                                <Setter TargetName="bd" Property="Effect">
-                                    <Setter.Value>
-                                        <DropShadowEffect Color="#F5C518" BlurRadius="10" ShadowDepth="0" Opacity="0.5"/>
-                                    </Setter.Value>
-                                </Setter>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="bd" Property="Background" Value="#1a1a1a"/>
                                 <Setter TargetName="bd" Property="BorderBrush" Value="#F5C518"/>
-                                <Setter Property="Foreground" Value="#ddd"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -4268,26 +4057,14 @@ try {
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="Foreground" Value="#bbb"/>
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Width" Value="36"/>
-            <Setter Property="Height" Value="36"/>
+            <Setter Property="Width" Value="34"/>
+            <Setter Property="Height" Value="34"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="bd" CornerRadius="18">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                    <GradientStop x:Name="bg0" Color="#181818" Offset="0"/>
-                                    <GradientStop x:Name="bg1" Color="#111111" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <Border.BorderBrush>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                    <GradientStop x:Name="br0" Color="#2a2a2a" Offset="0"/>
-                                    <GradientStop x:Name="br1" Color="#1a1a1a" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.BorderBrush>
-                            <Border.BorderThickness>1</Border.BorderThickness>
+                        <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                CornerRadius="17" BorderBrush="#2a2a2a" BorderThickness="1">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                                               TextElement.FontFamily="{TemplateBinding FontFamily}"
                                               TextElement.FontSize="{TemplateBinding FontSize}"
@@ -4295,20 +4072,12 @@ try {
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bg0" Property="Color" Value="#251e08"/>
-                                <Setter TargetName="bg1" Property="Color" Value="#1a1508"/>
-                                <Setter TargetName="br0" Property="Color" Value="#F5C518"/>
-                                <Setter TargetName="br1" Property="Color" Value="#8a6e0a"/>
+                                <Setter TargetName="bd" Property="Background" Value="#1f1a0a"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#F5C518"/>
                                 <Setter Property="Foreground" Value="#F5C518"/>
-                                <Setter TargetName="bd" Property="Effect">
-                                    <Setter.Value>
-                                        <DropShadowEffect Color="#F5C518" BlurRadius="12" ShadowDepth="0" Opacity="0.4"/>
-                                    </Setter.Value>
-                                </Setter>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="bg0" Property="Color" Value="#2a2410"/>
-                                <Setter TargetName="bg1" Property="Color" Value="#1f1a0a"/>
+                                <Setter TargetName="bd" Property="Background" Value="#2a2410"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -4340,8 +4109,9 @@ try {
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <!-- STATICKI POZADINSKI SLOJ (animacije uklonjene — Storyboard.TargetName na Freezable crashira .NET 4.x) -->
-            <Canvas Grid.RowSpan="2" Panel.ZIndex="0" IsHitTestVisible="False" ClipToBounds="True">
+            <!-- ANIMIRANI POZADINSKI SLOJ -->
+            <Canvas x:Name="bgCanvas" Grid.RowSpan="2" Panel.ZIndex="0"
+                    IsHitTestVisible="False" ClipToBounds="True">
                 <Ellipse Width="520" Height="520" Canvas.Left="-140" Canvas.Top="-160" Opacity="0.07">
                     <Ellipse.Fill>
                         <RadialGradientBrush>
@@ -4349,6 +4119,9 @@ try {
                             <GradientStop Color="#00F5C518" Offset="1"/>
                         </RadialGradientBrush>
                     </Ellipse.Fill>
+                    <Ellipse.RenderTransform>
+                        <TranslateTransform x:Name="bgT1" X="0" Y="0"/>
+                    </Ellipse.RenderTransform>
                 </Ellipse>
                 <Ellipse Width="640" Height="640" Canvas.Left="540" Canvas.Top="220" Opacity="0.05">
                     <Ellipse.Fill>
@@ -4357,6 +4130,9 @@ try {
                             <GradientStop Color="#007a5a10" Offset="1"/>
                         </RadialGradientBrush>
                     </Ellipse.Fill>
+                    <Ellipse.RenderTransform>
+                        <TranslateTransform x:Name="bgT2" X="0" Y="0"/>
+                    </Ellipse.RenderTransform>
                 </Ellipse>
                 <Ellipse Width="380" Height="380" Canvas.Left="200" Canvas.Top="450" Opacity="0.04">
                     <Ellipse.Fill>
@@ -4365,7 +4141,30 @@ try {
                             <GradientStop Color="#003a8b3a" Offset="1"/>
                         </RadialGradientBrush>
                     </Ellipse.Fill>
+                    <Ellipse.RenderTransform>
+                        <TranslateTransform x:Name="bgT3" X="0" Y="0"/>
+                    </Ellipse.RenderTransform>
                 </Ellipse>
+                <Canvas.Triggers>
+                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                        <BeginStoryboard>
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                <DoubleAnimation Storyboard.TargetName="bgT1" Storyboard.TargetProperty="X"
+                                                 From="0" To="120" Duration="0:0:32"/>
+                                <DoubleAnimation Storyboard.TargetName="bgT1" Storyboard.TargetProperty="Y"
+                                                 From="0" To="90" Duration="0:0:38"/>
+                                <DoubleAnimation Storyboard.TargetName="bgT2" Storyboard.TargetProperty="X"
+                                                 From="0" To="-140" Duration="0:0:40"/>
+                                <DoubleAnimation Storyboard.TargetName="bgT2" Storyboard.TargetProperty="Y"
+                                                 From="0" To="-100" Duration="0:0:36"/>
+                                <DoubleAnimation Storyboard.TargetName="bgT3" Storyboard.TargetProperty="X"
+                                                 From="0" To="100" Duration="0:0:42"/>
+                                <DoubleAnimation Storyboard.TargetName="bgT3" Storyboard.TargetProperty="Y"
+                                                 From="0" To="-120" Duration="0:0:44"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </EventTrigger>
+                </Canvas.Triggers>
             </Canvas>
 
             <!-- TOAST OVERLAY -->
@@ -4408,42 +4207,17 @@ try {
                                 Content="&#xE8BD;" ToolTip="Otvori Discord server"/>
                         <Button x:Name="btnUpdateNotify" Content="Nova verzija!" Visibility="Collapsed"
                                 Style="{StaticResource BtnUpdate}" Margin="0,0,12,0"/>
-                        <Border x:Name="licenseBadge" Visibility="Collapsed" CornerRadius="6"
-                                Padding="10,4" Margin="0,0,10,0" VerticalAlignment="Center"
+                        <Border x:Name="licenseBadge" Visibility="Collapsed" CornerRadius="4"
+                                Background="#13301f" BorderBrush="#30A46C" BorderThickness="1"
+                                Padding="8,3" Margin="0,0,10,0" VerticalAlignment="Center"
                                 ToolTip="Licenca aktivirana na ovom racunalu">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                    <GradientStop Color="#0d2a18" Offset="0"/>
-                                    <GradientStop Color="#132a1f" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <Border.BorderBrush>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                    <GradientStop Color="#30A46C" Offset="0"/>
-                                    <GradientStop Color="#1a6b42" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.BorderBrush>
-                            <Border.BorderThickness>1</Border.BorderThickness>
-                            <Border.Effect>
-                                <DropShadowEffect Color="#30A46C" BlurRadius="10" ShadowDepth="0" Opacity="0.3"/>
-                            </Border.Effect>
-                            <TextBlock x:Name="txtLicenseBadge" Text="LICENCA OK" FontSize="9"
+                            <TextBlock x:Name="txtLicenseBadge" Text="LICENCA" FontSize="9"
                                        FontWeight="Bold" Foreground="#30A46C" FontFamily="Segoe UI"/>
                         </Border>
-                        <Border CornerRadius="6" Padding="8,4" Margin="0,0,16,0" VerticalAlignment="Center">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                    <GradientStop Color="#0d1a0d" Offset="0"/>
-                                    <GradientStop Color="#111" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <StackPanel Orientation="Horizontal">
-                                <Ellipse x:Name="statusDot" Width="8" Height="8" Fill="#E5484D" Margin="0,0,6,0"/>
-                                <TextBlock x:Name="txtStatus" Text="OFFLINE" FontSize="10"
-                                           FontWeight="Bold" Foreground="#E5484D"
-                                           VerticalAlignment="Center" FontFamily="Segoe UI"/>
-                            </StackPanel>
-                        </Border>
+                        <Ellipse x:Name="statusDot" Width="8" Height="8" Fill="#E5484D" Margin="0,0,6,0"/>
+                        <TextBlock x:Name="txtStatus" Text="OFFLINE" FontSize="10"
+                                   FontWeight="Bold" Foreground="#E5484D" Margin="0,0,16,0"
+                                   VerticalAlignment="Center" FontFamily="Segoe UI"/>
                         <Button x:Name="btnFullscreen" Style="{StaticResource IconBtn}" Margin="0,0,4,0"
                                 Content="&#xE740;" FontSize="12" ToolTip="Cijeli zaslon (F11)"/>
                         <Button x:Name="btnMinimize" Style="{StaticResource IconBtn}" Margin="0,0,4,0"
@@ -4462,21 +4236,13 @@ try {
                 </Grid.ColumnDefinitions>
 
                 <!-- SIDEBAR -->
-                <Border Grid.Column="0" BorderThickness="0,0,1,0">
+                <Border Grid.Column="0" BorderBrush="#1a1a1a" BorderThickness="0,0,1,0">
                     <Border.Background>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#111111" Offset="0"/>
-                            <GradientStop Color="#0c0c0c" Offset="0.5"/>
-                            <GradientStop Color="#080808" Offset="1"/>
+                            <GradientStop Color="#101010" Offset="0"/>
+                            <GradientStop Color="#0a0a0a" Offset="1"/>
                         </LinearGradientBrush>
                     </Border.Background>
-                    <Border.BorderBrush>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#2a2210" Offset="0"/>
-                            <GradientStop Color="#1a1a1a" Offset="0.4"/>
-                            <GradientStop Color="#111" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.BorderBrush>
                     <DockPanel>
                         <!-- Server Selector -->
                         <StackPanel DockPanel.Dock="Top" Margin="8,12,8,0">
@@ -4695,14 +4461,38 @@ try {
                                     <!-- LIJEVA STRANA: server info -->
                                     <StackPanel Grid.Column="0" Margin="26,22,16,22">
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                            <Border x:Name="dashStatusDot" Width="14" Height="14" CornerRadius="7"
+                                            <Border Width="14" Height="14" CornerRadius="7"
                                                     VerticalAlignment="Center" Margin="0,0,12,0">
                                                 <Border.Background>
-                                                    <SolidColorBrush Color="#E5484D"/>
+                                                    <SolidColorBrush x:Name="dashStatusBrush" Color="#E5484D"/>
                                                 </Border.Background>
                                                 <Border.Effect>
-                                                    <DropShadowEffect Color="#E5484D" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
+                                                    <DropShadowEffect x:Name="dashStatusGlow" Color="#E5484D" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
                                                 </Border.Effect>
+                                                <Border.Triggers>
+                                                    <EventTrigger RoutedEvent="Border.Loaded">
+                                                        <BeginStoryboard>
+                                                            <Storyboard RepeatBehavior="Forever">
+                                                                <DoubleAnimation Storyboard.TargetName="dashStatusGlow"
+                                                                                 Storyboard.TargetProperty="BlurRadius"
+                                                                                 From="12" To="22" Duration="0:0:1.6"
+                                                                                 AutoReverse="True">
+                                                                    <DoubleAnimation.EasingFunction>
+                                                                        <SineEase EasingMode="EaseInOut"/>
+                                                                    </DoubleAnimation.EasingFunction>
+                                                                </DoubleAnimation>
+                                                                <DoubleAnimation Storyboard.TargetName="dashStatusGlow"
+                                                                                 Storyboard.TargetProperty="Opacity"
+                                                                                 From="0.55" To="0.95" Duration="0:0:1.6"
+                                                                                 AutoReverse="True">
+                                                                    <DoubleAnimation.EasingFunction>
+                                                                        <SineEase EasingMode="EaseInOut"/>
+                                                                    </DoubleAnimation.EasingFunction>
+                                                                </DoubleAnimation>
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </EventTrigger>
+                                                </Border.Triggers>
                                             </Border>
                                             <Ellipse x:Name="statusDotBig" Visibility="Collapsed"/>
                                             <TextBlock x:Name="txtServerName" Text="Ucitavam..."
@@ -4875,81 +4665,34 @@ try {
                                 </Grid>
                             </Border>
 
-                            <!-- Mod statistike — kartice -->
-                            <UniformGrid Columns="3" Margin="0,0,0,16">
-                                <Border Margin="0,0,6,0" CornerRadius="10" Padding="20,16"
-                                        BorderThickness="1">
-                                    <Border.Background>
-                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                            <GradientStop Color="#181510" Offset="0"/>
-                                            <GradientStop Color="#111111" Offset="1"/>
-                                        </LinearGradientBrush>
-                                    </Border.Background>
-                                    <Border.BorderBrush>
-                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                            <GradientStop Color="#3a2e10" Offset="0"/>
-                                            <GradientStop Color="#1f1f1f" Offset="1"/>
-                                        </LinearGradientBrush>
-                                    </Border.BorderBrush>
-                                    <StackPanel>
-                                        <TextBlock Text="MOJI MODOVI" FontSize="10" Foreground="#888"
-                                                   FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,8"/>
-                                        <TextBlock x:Name="txtMyModCount" Text="-" FontSize="28"
+                            <!-- Compact mod stats strip -->
+                            <Border Style="{StaticResource SrCard}" Padding="16,12" Margin="0,0,0,16">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" HorizontalAlignment="Center">
+                                        <TextBlock Text="MOJI MODOVI" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="txtMyModCount" Text="-" FontSize="22"
                                                    FontWeight="Bold" Foreground="{StaticResource Gold}"
-                                                   FontFamily="Segoe UI"/>
-                                        <TextBlock Text="lokalno instalirano" FontSize="10" Foreground="#555"
-                                                   FontFamily="Segoe UI" Margin="0,4,0,0"/>
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
                                     </StackPanel>
-                                </Border>
-                                <Border Margin="3,0,3,0" CornerRadius="10" Padding="20,16"
-                                        BorderThickness="1">
-                                    <Border.Background>
-                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                            <GradientStop Color="#101518" Offset="0"/>
-                                            <GradientStop Color="#111111" Offset="1"/>
-                                        </LinearGradientBrush>
-                                    </Border.Background>
-                                    <Border.BorderBrush>
-                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                            <GradientStop Color="#102e3a" Offset="0"/>
-                                            <GradientStop Color="#1f1f1f" Offset="1"/>
-                                        </LinearGradientBrush>
-                                    </Border.BorderBrush>
-                                    <StackPanel>
-                                        <TextBlock Text="SERVER" FontSize="10" Foreground="#888"
-                                                   FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,8"/>
-                                        <TextBlock x:Name="txtServerModCount" Text="-" FontSize="28"
-                                                   FontWeight="Bold" Foreground="#70b8ff"
-                                                   FontFamily="Segoe UI"/>
-                                        <TextBlock Text="na serveru potrebno" FontSize="10" Foreground="#555"
-                                                   FontFamily="Segoe UI" Margin="0,4,0,0"/>
+                                    <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                                        <TextBlock Text="SERVER" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="txtServerModCount" Text="-" FontSize="22"
+                                                   FontWeight="Bold" Foreground="{StaticResource Gold}"
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
                                     </StackPanel>
-                                </Border>
-                                <Border Margin="6,0,0,0" CornerRadius="10" Padding="20,16"
-                                        BorderThickness="1">
-                                    <Border.Background>
-                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                            <GradientStop Color="#181010" Offset="0"/>
-                                            <GradientStop Color="#111111" Offset="1"/>
-                                        </LinearGradientBrush>
-                                    </Border.Background>
-                                    <Border.BorderBrush>
-                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                            <GradientStop Color="#3a1010" Offset="0"/>
-                                            <GradientStop Color="#1f1f1f" Offset="1"/>
-                                        </LinearGradientBrush>
-                                    </Border.BorderBrush>
-                                    <StackPanel>
-                                        <TextBlock Text="FALI TI" FontSize="10" Foreground="#888"
-                                                   FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,8"/>
-                                        <TextBlock x:Name="txtMissingCount" Text="-" FontSize="28"
+                                    <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+                                        <TextBlock Text="FALI TI" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="txtMissingCount" Text="-" FontSize="22"
                                                    FontWeight="Bold" Foreground="{StaticResource DangerRed}"
-                                                   FontFamily="Segoe UI"/>
-                                        <TextBlock Text="treba skinuti" FontSize="10" Foreground="#555"
-                                                   FontFamily="Segoe UI" Margin="0,4,0,0"/>
+                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
                                     </StackPanel>
-                                </Border>
-                            </UniformGrid>
+                                </Grid>
+                            </Border>
                             <!-- Skriveni elementi za kompatibilnost s kodom -->
                             <TextBlock x:Name="txtModSizeTotal" Visibility="Collapsed"/>
 
@@ -4984,7 +4727,27 @@ try {
                                                     <Border Background="#0d0d0d" CornerRadius="6"
                                                             Padding="10,7" Margin="0,0,0,4"
                                                             BorderBrush="#2a1a08" BorderThickness="1"
-                                                            ToolTip="{Binding ToolTipText}">
+                                                            ToolTip="{Binding ToolTipText}"
+                                                            RenderTransformOrigin="0,0.5">
+                                                        <Border.RenderTransform>
+                                                            <TranslateTransform X="-20"/>
+                                                        </Border.RenderTransform>
+                                                        <Border.Triggers>
+                                                            <EventTrigger RoutedEvent="Border.Loaded">
+                                                                <BeginStoryboard>
+                                                                    <Storyboard>
+                                                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.Opacity)"
+                                                                                         From="0" To="1" Duration="0:0:0.35"/>
+                                                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)"
+                                                                                         From="-20" To="0" Duration="0:0:0.35">
+                                                                            <DoubleAnimation.EasingFunction>
+                                                                                <CubicEase EasingMode="EaseOut"/>
+                                                                            </DoubleAnimation.EasingFunction>
+                                                                        </DoubleAnimation>
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </EventTrigger>
+                                                        </Border.Triggers>
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
                                                                 <ColumnDefinition Width="Auto"/>
@@ -4997,6 +4760,17 @@ try {
                                                                 <Border.Effect>
                                                                     <DropShadowEffect Color="#E5484D" BlurRadius="8" ShadowDepth="0" Opacity="0.9"/>
                                                                 </Border.Effect>
+                                                                <Border.Triggers>
+                                                                    <EventTrigger RoutedEvent="Border.Loaded">
+                                                                        <BeginStoryboard>
+                                                                            <Storyboard RepeatBehavior="Forever">
+                                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                                                 From="1" To="0.4" Duration="0:0:1.2"
+                                                                                                 AutoReverse="True"/>
+                                                                            </Storyboard>
+                                                                        </BeginStoryboard>
+                                                                    </EventTrigger>
+                                                                </Border.Triggers>
                                                             </Border>
                                                             <TextBlock Grid.Column="1" Text="{Binding Name}"
                                                                        FontSize="11" Foreground="#ddd"
@@ -5037,110 +4811,42 @@ try {
                             </StackPanel>
                         </Grid>
 
-                        <!-- Stat strip sa gradient karticama -->
+                        <!-- Stat strip -->
                         <UniformGrid Grid.Row="1" Columns="4" Margin="0,0,0,16">
-                            <Border Margin="0,0,6,0" CornerRadius="10" Padding="16,14" MinHeight="80"
-                                    BorderThickness="1">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#181510" Offset="0"/>
-                                        <GradientStop Color="#111111" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                                <Border.BorderBrush>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                        <GradientStop Color="#3a2e10" Offset="0"/>
-                                        <GradientStop Color="#1f1f1f" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.BorderBrush>
+                            <Border Margin="0,0,6,0" Style="{StaticResource SrCard}" Padding="16,12" MinHeight="80">
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="LOKALNO" FontSize="10" Foreground="#888"
-                                               FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
-                                    <TextBlock x:Name="txtModsLocal" Text="-" FontSize="26"
+                                    <TextBlock Text="LOKALNO" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="txtModsLocal" Text="-" FontSize="24"
                                                FontWeight="Bold" Foreground="{StaticResource Gold}" FontFamily="Segoe UI"/>
                                 </StackPanel>
                             </Border>
-                            <Border Margin="3,0,3,0" CornerRadius="10" Padding="16,14" MinHeight="80"
-                                    BorderThickness="1">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#101418" Offset="0"/>
-                                        <GradientStop Color="#111111" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                                <Border.BorderBrush>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                        <GradientStop Color="#10304a" Offset="0"/>
-                                        <GradientStop Color="#1f1f1f" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.BorderBrush>
+                            <Border Margin="3,0,3,0" Style="{StaticResource SrCard}" Padding="16,12" MinHeight="80">
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="SERVER" FontSize="10" Foreground="#888"
-                                               FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
-                                    <TextBlock x:Name="txtModsServer" Text="-" FontSize="26"
-                                               FontWeight="Bold" Foreground="#4EA8DE" FontFamily="Segoe UI"/>
+                                    <TextBlock Text="SERVER" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="txtModsServer" Text="-" FontSize="24"
+                                               FontWeight="Bold" Foreground="{StaticResource Gold}" FontFamily="Segoe UI"/>
                                 </StackPanel>
                             </Border>
-                            <Border Margin="3,0,3,0" CornerRadius="10" Padding="16,14" MinHeight="80"
-                                    BorderThickness="1">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#1a1010" Offset="0"/>
-                                        <GradientStop Color="#111111" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                                <Border.BorderBrush>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                        <GradientStop Color="#4a1010" Offset="0"/>
-                                        <GradientStop Color="#1f1f1f" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.BorderBrush>
+                            <Border Margin="3,0,3,0" Style="{StaticResource SrCard}" Padding="16,12" MinHeight="80">
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="FALI" FontSize="10" Foreground="#888"
-                                               FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
-                                    <TextBlock x:Name="txtModsMissing" Text="-" FontSize="26"
+                                    <TextBlock Text="FALI / ZASTARJELO" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="txtModsMissing" Text="-" FontSize="24"
                                                FontWeight="Bold" Foreground="{StaticResource DangerRed}" FontFamily="Segoe UI"/>
                                 </StackPanel>
                             </Border>
-                            <Border Margin="6,0,0,0" CornerRadius="10" Padding="16,14" MinHeight="80"
-                                    BorderThickness="1">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#141018" Offset="0"/>
-                                        <GradientStop Color="#111111" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                                <Border.BorderBrush>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                        <GradientStop Color="#2a1a4a" Offset="0"/>
-                                        <GradientStop Color="#1f1f1f" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.BorderBrush>
+                            <Border Margin="6,0,0,0" Style="{StaticResource SrCard}" Padding="16,12" MinHeight="80">
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="VIDLJIVO" FontSize="10" Foreground="#888"
-                                               FontWeight="Bold" FontFamily="Segoe UI" Margin="0,0,0,6"/>
-                                    <TextBlock x:Name="txtModsVisible" Text="-" FontSize="26"
+                                    <TextBlock Text="VIDLJIVO" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="txtModsVisible" Text="-" FontSize="24"
                                                FontWeight="Bold" Foreground="#9d8df5" FontFamily="Segoe UI"/>
                                 </StackPanel>
                             </Border>
                         </UniformGrid>
 
                         <!-- Toolbar (akcije + search + filteri u jednom blocku) -->
-                        <Border Grid.Row="2" CornerRadius="10"
+                        <Border Grid.Row="2" Background="#121212" CornerRadius="8"
                                 Padding="16,14" Margin="0,0,0,12"
-                                BorderThickness="1">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                    <GradientStop Color="#141414" Offset="0"/>
-                                    <GradientStop Color="#0e0e0e" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <Border.BorderBrush>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                    <GradientStop Color="#2a2210" Offset="0"/>
-                                    <GradientStop Color="#1a1a1a" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.BorderBrush>
+                                BorderBrush="{StaticResource CardBorder}" BorderThickness="1">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
@@ -5155,13 +4861,19 @@ try {
                                     <Button x:Name="btnRefreshMods" Content="Osvjezi"
                                             Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
                                             ToolTip="Provjeri server modove i usporedi sa lokalnim"/>
-                                    <Button x:Name="btnDownloadMissing" Content="Preuzmi sto fali"
+                                    <Button x:Name="btnRescanMods" Content="Ponovno skeniraj"
+                                            Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                                            ToolTip="Prisilno osvjezi manifest sa servera (bot ili mods.html)"/>
+                                    <Button x:Name="btnDownloadMissing" Content="Skini Sve Sto Fali"
                                             Style="{StaticResource BtnPrimary}" Margin="0,0,8,0"
                                             ToolTip="Skini sve mod-ove sa statusom FALI ili ZASTARIO"/>
-                                    <!-- Skriveni za kompatibilnost s kodom -->
-                                    <Button x:Name="btnRescanMods" Visibility="Collapsed"/>
-                                    <Button x:Name="btnDeleteMod" Visibility="Collapsed"/>
-                                    <Button x:Name="btnOpenModsFolder" Visibility="Collapsed"/>
+                                    <Border Width="1" Background="#2a2a2a" Margin="4,2,12,2"/>
+                                    <Button x:Name="btnDeleteMod" Content="Obrisi"
+                                            Style="{StaticResource BtnDanger}" Margin="0,0,8,0"
+                                            ToolTip="Obrisi oznaceni lokalni mod (Recycle Bin)"/>
+                                    <Button x:Name="btnOpenModsFolder" Content="Otvori Folder"
+                                            Style="{StaticResource BtnGhost}"
+                                            ToolTip="Otvori mods folder u Windows Exploreru"/>
                                 </StackPanel>
                                 <Grid Grid.Row="0" Grid.Column="1" Width="280" VerticalAlignment="Center">
                                     <TextBox x:Name="txtModSearch" Style="{StaticResource DarkInput}"
@@ -5197,29 +4909,14 @@ try {
                             </Grid>
                         </Border>
 
-                        <Border x:Name="modListGlowBorder" Grid.Row="3" CornerRadius="10"
-                                BorderThickness="1" Padding="12">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                    <GradientStop Color="#0e0e0e" Offset="0"/>
-                                    <GradientStop Color="#0a0a0a" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <Border.BorderBrush>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                    <GradientStop Color="#3a2e10" Offset="0"/>
-                                    <GradientStop Color="#1a1a1a" Offset="0.5"/>
-                                    <GradientStop Color="#3a2e10" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.BorderBrush>
-                            <Border.Effect>
-                                <DropShadowEffect Color="#F5C518" BlurRadius="8" ShadowDepth="0" Opacity="0.2"/>
-                            </Border.Effect>
+                        <Border Grid.Row="3" Background="#0e0e0e" CornerRadius="8"
+                                BorderBrush="{StaticResource CardBorder}" BorderThickness="1" Padding="12">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
                                 <ListBox x:Name="lstMods" Background="Transparent" Foreground="#ddd"
                                          BorderThickness="0" FontFamily="Segoe UI"
                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                         ScrollViewer.CanContentScroll="False"
+                                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
                                          ItemContainerStyle="{StaticResource ModCardListItem}">
                                     <ListBox.ItemsPanel>
                                         <ItemsPanelTemplate>
@@ -5394,6 +5091,7 @@ try {
                                         </ContextMenu>
                                     </ListBox.ContextMenu>
                                 </ListBox>
+                            </ScrollViewer>
                         </Border>
 
                         <Border Grid.Row="4" Background="#141414" CornerRadius="8"
@@ -5404,269 +5102,76 @@ try {
                         </Border>
                     </Grid>
 
-                    <!-- PAGE: KONFIGURIRAJ SAVE (inline wizard) -->
+                    <!-- PAGE: IGRA (savegame + mod profili) -->
                     <ScrollViewer x:Name="pageIgra" Visibility="Collapsed"
                                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                        <Grid Margin="24,24,24,24" MaxWidth="900">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+                        <StackPanel Margin="24,24,24,24" MaxWidth="900">
 
-                            <!-- Naslov -->
-                            <StackPanel Grid.Row="0" Margin="0,0,0,18">
-                                <TextBlock Text="Konfiguriraj save" Style="{StaticResource PageTitle}"/>
-                                <TextBlock x:Name="txtWizardSubtitle"
-                                           Text="Postavi FS25 savegame, mod folder, postavke i profil u par koraka"
-                                           FontSize="12" Foreground="#666" FontFamily="Segoe UI"
-                                           Margin="0,4,0,0" TextWrapping="Wrap"/>
+                            <StackPanel Margin="0,0,0,18">
+                                    <TextBlock Text="Savegame" Style="{StaticResource PageTitle}"/>
+                                <TextBlock Text="Pregled FS25 save slotova (bez izmjene save datoteka). Mod profili su u Multiplayer folderi."
+                                           FontSize="12" Foreground="#666" FontFamily="Segoe UI" Margin="0,4,0,0"
+                                           TextWrapping="Wrap"/>
                             </StackPanel>
 
-                            <!-- Step indikator -->
-                            <Border Grid.Row="1" Background="#121212" CornerRadius="10"
-                                    Padding="16,14" Margin="0,0,0,16"
-                                    BorderBrush="#1f1f1f" BorderThickness="1">
-                                <UniformGrid Columns="5">
-                                    <StackPanel x:Name="wizStep1Indicator" HorizontalAlignment="Center">
-                                        <Border Width="32" Height="32" CornerRadius="16" HorizontalAlignment="Center"
-                                                Background="#F5C518" Margin="0,0,0,6">
-                                            <TextBlock Text="1" FontSize="14" FontWeight="Bold"
-                                                       Foreground="#111" FontFamily="Segoe UI"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                        </Border>
-                                        <TextBlock Text="Odaberi save" FontSize="9" Foreground="#aaa"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
-                                    </StackPanel>
-                                    <StackPanel x:Name="wizStep2Indicator" HorizontalAlignment="Center">
-                                        <Border Width="32" Height="32" CornerRadius="16" HorizontalAlignment="Center"
-                                                Background="#333" Margin="0,0,0,6">
-                                            <TextBlock Text="2" FontSize="14" FontWeight="Bold"
-                                                       Foreground="#888" FontFamily="Segoe UI"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                        </Border>
-                                        <TextBlock Text="Mod folder" FontSize="9" Foreground="#666"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
-                                    </StackPanel>
-                                    <StackPanel x:Name="wizStep3Indicator" HorizontalAlignment="Center">
-                                        <Border Width="32" Height="32" CornerRadius="16" HorizontalAlignment="Center"
-                                                Background="#333" Margin="0,0,0,6">
-                                            <TextBlock Text="3" FontSize="14" FontWeight="Bold"
-                                                       Foreground="#888" FontFamily="Segoe UI"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                        </Border>
-                                        <TextBlock Text="Postavke" FontSize="9" Foreground="#666"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
-                                    </StackPanel>
-                                    <StackPanel x:Name="wizStep4Indicator" HorizontalAlignment="Center">
-                                        <Border Width="32" Height="32" CornerRadius="16" HorizontalAlignment="Center"
-                                                Background="#333" Margin="0,0,0,6">
-                                            <TextBlock Text="4" FontSize="14" FontWeight="Bold"
-                                                       Foreground="#888" FontFamily="Segoe UI"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                        </Border>
-                                        <TextBlock Text="Mod profil" FontSize="9" Foreground="#666"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
-                                    </StackPanel>
-                                    <StackPanel x:Name="wizStep5Indicator" HorizontalAlignment="Center">
-                                        <Border Width="32" Height="32" CornerRadius="16" HorizontalAlignment="Center"
-                                                Background="#333" Margin="0,0,0,6">
-                                            <TextBlock Text="5" FontSize="14" FontWeight="Bold"
-                                                       Foreground="#888" FontFamily="Segoe UI"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                        </Border>
-                                        <TextBlock Text="Potvrdi" FontSize="9" Foreground="#666"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
-                                    </StackPanel>
-                                </UniformGrid>
+                            <Border Background="#161616" CornerRadius="10" Padding="20"
+                                    Margin="0,0,0,14" BorderBrush="#222" BorderThickness="1">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,8">
+                                        <TextBlock Text="Savegame slotovi (FS25)" FontSize="15"
+                                                   FontWeight="SemiBold" Foreground="#F5C518" FontFamily="Segoe UI"/>
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                            <Button x:Name="btnSaveWizard" Content="Čarobnjak savea"
+                                                    Style="{StaticResource BtnPrimary}" Margin="0,0,8,0"
+                                                    Padding="16,8" ToolTip="7 koraka: save, mod folder, profil, backup, primjena"/>
+                                            <Button x:Name="btnRefreshSavegames" Content="Osvjezi savegame"
+                                                    Style="{StaticResource BtnGhost}" Padding="16,8"/>
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBlock x:Name="txtIgraSavePath" Text="-"
+                                               FontSize="10" Foreground="#888" FontFamily="Segoe UI"
+                                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <Border Background="#111" CornerRadius="8" BorderBrush="#1a1a1a"
+                                            BorderThickness="1" MaxHeight="320">
+                                        <ListView x:Name="lstSavegames" Background="Transparent"
+                                                  BorderThickness="0" Foreground="#ddd" FontFamily="Segoe UI"
+                                                  ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                            <ListView.View>
+                                                <GridView>
+                                                    <GridViewColumn Header="Slot" Width="44"
+                                                                    DisplayMemberBinding="{Binding Slot}"/>
+                                                    <GridViewColumn Header="Ime" Width="130"
+                                                                    DisplayMemberBinding="{Binding Name}"/>
+                                                    <GridViewColumn Header="Mapa" Width="110"
+                                                                    DisplayMemberBinding="{Binding MapTitle}"/>
+                                                    <GridViewColumn Header="Novac" Width="80"
+                                                                    DisplayMemberBinding="{Binding Money}"/>
+                                                    <GridViewColumn Header="Sati" Width="64"
+                                                                    DisplayMemberBinding="{Binding PlayTime}"/>
+                                                    <GridViewColumn Header="MB" Width="44"
+                                                                    DisplayMemberBinding="{Binding SizeMb}"/>
+                                                    <GridViewColumn Header="Izmjena" Width="110"
+                                                                    DisplayMemberBinding="{Binding LastWrite}"/>
+                                                </GridView>
+                                            </ListView.View>
+                                        </ListView>
+                                    </Border>
+                                </StackPanel>
                             </Border>
 
-                            <!-- Sadrzaj koraka -->
-                            <Border Grid.Row="2" Background="#161616" CornerRadius="10"
-                                    Padding="24,20" Margin="0,0,0,16"
-                                    BorderBrush="#222" BorderThickness="1" MinHeight="300">
-                                <Grid>
-                                    <!-- KORAK 1: Odaberi save (kartice kao FS25) -->
-                                    <StackPanel x:Name="wizPage1" Visibility="Visible">
-                                        <TextBlock Text="Odaberi Save Game"
-                                                   FontSize="16" FontWeight="Bold" Foreground="#eee"
-                                                   FontFamily="Segoe UI" Margin="0,0,0,4"/>
-                                        <TextBlock x:Name="txtIgraSavePath"
-                                                   Text="Odaberi save koji si vec kreirao u FS25."
-                                                   FontSize="11" Foreground="#888" FontFamily="Segoe UI"
-                                                   TextWrapping="Wrap" Margin="0,0,0,14"/>
-                                        <ListBox x:Name="lstSavegames" Background="Transparent"
-                                                 BorderThickness="0" Foreground="#ddd" FontFamily="Segoe UI"
-                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                                 ScrollViewer.CanContentScroll="False"
-                                                 MaxHeight="360">
-                                            <ListBox.ItemContainerStyle>
-                                                <Style TargetType="ListBoxItem">
-                                                    <Setter Property="Background" Value="Transparent"/>
-                                                    <Setter Property="Cursor" Value="Hand"/>
-                                                    <Setter Property="Margin" Value="0,0,0,6"/>
-                                                    <Setter Property="Padding" Value="0"/>
-                                                    <Setter Property="Template">
-                                                        <Setter.Value>
-                                                            <ControlTemplate TargetType="ListBoxItem">
-                                                                <Border x:Name="bd" CornerRadius="10" Padding="16,14"
-                                                                        BorderThickness="1" BorderBrush="#222">
-                                                                    <Border.Background>
-                                                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                                                            <GradientStop Color="#141414" Offset="0"/>
-                                                                            <GradientStop Color="#111111" Offset="1"/>
-                                                                        </LinearGradientBrush>
-                                                                    </Border.Background>
-                                                                    <ContentPresenter/>
-                                                                </Border>
-                                                                <ControlTemplate.Triggers>
-                                                                    <Trigger Property="IsSelected" Value="True">
-                                                                        <Setter TargetName="bd" Property="BorderBrush" Value="#F5C518"/>
-                                                                        <Setter TargetName="bd" Property="Effect">
-                                                                            <Setter.Value>
-                                                                                <DropShadowEffect Color="#F5C518" BlurRadius="10" ShadowDepth="0" Opacity="0.25"/>
-                                                                            </Setter.Value>
-                                                                        </Setter>
-                                                                    </Trigger>
-                                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                                        <Setter TargetName="bd" Property="BorderBrush" Value="#3a3a3a"/>
-                                                                    </Trigger>
-                                                                </ControlTemplate.Triggers>
-                                                            </ControlTemplate>
-                                                        </Setter.Value>
-                                                    </Setter>
-                                                </Style>
-                                            </ListBox.ItemContainerStyle>
-                                            <ListBox.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="*"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <!-- Slot badge -->
-                                                        <Border Grid.Column="0" Background="#1a1a1a" CornerRadius="6"
-                                                                Padding="8,4" Margin="0,0,14,0" VerticalAlignment="Center"
-                                                                BorderBrush="#333" BorderThickness="1">
-                                                            <TextBlock Text="{Binding SlotLabel}" FontSize="10"
-                                                                       FontWeight="Bold" Foreground="#888" FontFamily="Segoe UI"/>
-                                                        </Border>
-                                                        <!-- Save info -->
-                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                            <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"
-                                                                       Foreground="#eee" FontFamily="Segoe UI"/>
-                                                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                                                <TextBlock Text="{Binding MapTitle}" FontSize="11"
-                                                                           Foreground="#888" FontFamily="Segoe UI" Margin="0,0,12,0"/>
-                                                                <TextBlock Text="{Binding PlayTimeLabel}" FontSize="11"
-                                                                           Foreground="#666" FontFamily="Segoe UI" Margin="0,0,12,0"/>
-                                                                <TextBlock Text="{Binding MoneyLabel}" FontSize="11"
-                                                                           Foreground="#30A46C" FontFamily="Segoe UI" Margin="0,0,12,0"/>
-                                                                <TextBlock Text="{Binding LastWrite}" FontSize="11"
-                                                                           Foreground="#555" FontFamily="Segoe UI"/>
-                                                            </StackPanel>
-                                                        </StackPanel>
-                                                        <!-- Status -->
-                                                        <TextBlock Grid.Column="2" Text="{Binding StatusLabel}"
-                                                                   FontSize="10" Foreground="#888"
-                                                                   FontFamily="Segoe UI" VerticalAlignment="Center"/>
-                                                    </Grid>
-                                                </DataTemplate>
-                                            </ListBox.ItemTemplate>
-                                        </ListBox>
-                                        <TextBlock x:Name="txtIgraSaveHint" FontSize="11" Foreground="#666"
-                                                   FontFamily="Segoe UI" TextWrapping="Wrap" Margin="0,8,0,0"
-                                                   Text="Nema savegame foldera. Pokreni FS25, kreiraj save, pa se vrati ovdje."/>
-                                        <Button x:Name="btnRefreshSavegames" Content="Osvjezi savegame listu"
-                                                Style="{StaticResource BtnGhost}" HorizontalAlignment="Left"
-                                                Margin="0,8,0,0" Padding="14,8"/>
-                                    </StackPanel>
-
-                                    <!-- KORAK 2: Mod folder -->
-                                    <StackPanel x:Name="wizPage2" Visibility="Collapsed">
-                                        <TextBlock Text="Korak 2: Mod folder za ovaj save"
-                                                   FontSize="15" FontWeight="SemiBold" Foreground="#F5C518"
-                                                   FontFamily="Segoe UI" Margin="0,0,0,6"/>
-                                        <TextBlock Text="Ovaj folder ce se koristiti kao mod direktorij za odabrani save (gameSettings.xml → modsDirectoryOverride)."
-                                                   FontSize="11" Foreground="#888" FontFamily="Segoe UI"
-                                                   TextWrapping="Wrap" Margin="0,0,0,14"/>
-                                        <TextBox x:Name="txtWizModsPath" Background="#1a1a1a" Foreground="#eee"
-                                                 FontFamily="Segoe UI" FontSize="12" Padding="10,10"
-                                                 BorderBrush="#333" BorderThickness="1"/>
-                                        <Button x:Name="btnWizBrowseMods" Content="Odaberi folder..."
-                                                Style="{StaticResource BtnGhost}" HorizontalAlignment="Left"
-                                                Margin="0,10,0,0" Padding="14,8"/>
-                                    </StackPanel>
-
-                                    <!-- KORAK 3: Postavke -->
-                                    <StackPanel x:Name="wizPage3" Visibility="Collapsed">
-                                        <TextBlock Text="Korak 3: Postavke savea"
-                                                   FontSize="15" FontWeight="SemiBold" Foreground="#F5C518"
-                                                   FontFamily="Segoe UI" Margin="0,0,0,6"/>
-                                        <TextBlock x:Name="txtWizSaveInfo" Text=""
-                                                   FontSize="12" Foreground="#aaa" FontFamily="Segoe UI"
-                                                   TextWrapping="Wrap" Margin="0,0,0,14"/>
-                                        <CheckBox x:Name="chkWizSkipIntro"
-                                                  Content="Preskoci Giants intro (-skipStartVideos)"
-                                                  Foreground="#aaa" FontFamily="Segoe UI" Margin="0,0,0,10"/>
-                                        <CheckBox x:Name="chkWizBackup"
-                                                  Content="Napravi backup savegame foldera prije primjene (preporuceno)"
-                                                  Foreground="#aaa" FontFamily="Segoe UI" IsChecked="True"/>
-                                    </StackPanel>
-
-                                    <!-- KORAK 4: Mod profil -->
-                                    <StackPanel x:Name="wizPage4" Visibility="Collapsed">
-                                        <TextBlock Text="Korak 4: Mod profil (loadout)"
-                                                   FontSize="15" FontWeight="SemiBold" Foreground="#F5C518"
-                                                   FontFamily="Segoe UI" Margin="0,0,0,6"/>
-                                        <TextBlock Text="Povezi mod profil s ovim saveom. Profil definira koji su modovi aktivni."
-                                                   FontSize="11" Foreground="#888" FontFamily="Segoe UI"
-                                                   TextWrapping="Wrap" Margin="0,0,0,14"/>
-                                        <Border Background="#111" CornerRadius="8" BorderBrush="#1a1a1a"
-                                                BorderThickness="1" MaxHeight="240">
-                                            <ListBox x:Name="lstWizProfiles" Background="Transparent"
-                                                     Foreground="#ddd" FontFamily="Segoe UI" FontSize="12"
-                                                     BorderThickness="0" DisplayMemberPath="Label"/>
-                                        </Border>
-                                    </StackPanel>
-
-                                    <!-- KORAK 5: Potvrda -->
-                                    <StackPanel x:Name="wizPage5" Visibility="Collapsed">
-                                        <TextBlock Text="Korak 5: Potvrda — ovo ce se primijeniti"
-                                                   FontSize="15" FontWeight="SemiBold" Foreground="#F5C518"
-                                                   FontFamily="Segoe UI" Margin="0,0,0,10"/>
-                                        <Border Background="#111" CornerRadius="8" Padding="16,14"
-                                                BorderBrush="#1a1a1a" BorderThickness="1">
-                                            <TextBlock x:Name="txtWizSummary" Text="" FontSize="12"
-                                                       Foreground="#bbb" FontFamily="Segoe UI" TextWrapping="Wrap"/>
-                                        </Border>
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-
-                            <!-- Navigacijski gumbi -->
-                            <Grid Grid.Row="3">
+                            <Grid Margin="0,4,0,0">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <Button x:Name="btnOpenSaveSlot" Grid.Column="0"
-                                        Content="Otvori slot u Exploreru"
-                                        Style="{StaticResource BtnGhost}" Padding="16,10"
-                                        ToolTip="Otvara odabrani savegame folder"/>
-                                <Button x:Name="btnWizBack" Grid.Column="2" Content="Natrag"
-                                        Style="{StaticResource BtnGhost}" Padding="18,10" Margin="0,0,8,0"
-                                        Visibility="Collapsed"/>
-                                <Button x:Name="btnWizNext" Grid.Column="3" Content="Dalje"
-                                        Style="{StaticResource BtnPrimary}" Padding="24,10" FontWeight="Bold"/>
-                                <!-- Skriveni za kompatibilnost -->
-                                <Button x:Name="btnSaveWizard" Visibility="Collapsed"/>
+                                <TextBlock x:Name="txtIgraSaveHint" Grid.Column="0" VerticalAlignment="Center"
+                                           FontSize="11" Foreground="#666" FontFamily="Segoe UI" TextWrapping="Wrap"
+                                           Margin="0,0,12,0"/>
+                                <Button x:Name="btnOpenSaveSlot" Grid.Column="1" Content="Otvori slot u Exploreru"
+                                        Style="{StaticResource BtnPrimary}" Padding="20,10"
+                                        ToolTip="Otvara odabrani savegame folder (bez izmjene datoteka)"/>
                             </Grid>
-                        </Grid>
+                        </StackPanel>
                     </ScrollViewer>
 
                     <!-- PAGE: MULTIPLAYER FOLDERS -->
@@ -5684,23 +5189,8 @@ try {
                                         VerticalAlignment="Top" Padding="16,8"/>
                             </Grid>
 
-                            <Border CornerRadius="10" Padding="20"
-                                    Margin="0,0,0,14" BorderThickness="1">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#181510" Offset="0"/>
-                                        <GradientStop Color="#111111" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                                <Border.BorderBrush>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                        <GradientStop Color="#3a2e10" Offset="0"/>
-                                        <GradientStop Color="#1f1f1f" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.BorderBrush>
-                                <Border.Effect>
-                                    <DropShadowEffect Color="#F5C518" BlurRadius="8" ShadowDepth="0" Opacity="0.15"/>
-                                </Border.Effect>
+                            <Border Background="#161616" CornerRadius="10" Padding="20"
+                                    Margin="0,0,0,14" BorderBrush="#3a2e10" BorderThickness="1">
                                 <StackPanel>
                                     <TextBlock Text="Brzi odabir foldera" FontSize="15" FontWeight="SemiBold"
                                                Foreground="#F5C518" FontFamily="Segoe UI" Margin="0,0,0,10"/>
@@ -5727,20 +5217,8 @@ try {
                                         Margin="0,0,8,8" Padding="14,10"/>
                             </WrapPanel>
 
-                            <Border CornerRadius="10" Padding="16"
-                                    Margin="0,0,0,14" BorderThickness="1">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#131313" Offset="0"/>
-                                        <GradientStop Color="#0e0e0e" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                                <Border.BorderBrush>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                        <GradientStop Color="#2a2a2a" Offset="0"/>
-                                        <GradientStop Color="#1a1a1a" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.BorderBrush>
+                            <Border Background="#161616" CornerRadius="10" Padding="16"
+                                    Margin="0,0,0,14" BorderBrush="#222" BorderThickness="1">
                                 <StackPanel>
                                     <TextBlock Text="Folderi (JSON)" FontSize="13" FontWeight="SemiBold"
                                                Foreground="#ccc" FontFamily="Segoe UI" Margin="0,0,0,8"/>
@@ -5757,24 +5235,12 @@ try {
                                 </StackPanel>
                             </Border>
 
-                            <Border CornerRadius="10" Padding="20"
-                                    Margin="0,0,0,14" BorderThickness="1">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#101418" Offset="0"/>
-                                        <GradientStop Color="#111111" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                                <Border.BorderBrush>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                        <GradientStop Color="#10304a" Offset="0"/>
-                                        <GradientStop Color="#1f1f1f" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.BorderBrush>
+                            <Border Background="#161616" CornerRadius="10" Padding="20"
+                                    Margin="0,0,0,14" BorderBrush="#222" BorderThickness="1">
                                 <StackPanel>
                                     <Grid Margin="0,0,0,10">
                                         <TextBlock Text="Mod profili (po serveru)" FontSize="15" FontWeight="SemiBold"
-                                                   Foreground="#4EA8DE" FontFamily="Segoe UI"/>
+                                                   Foreground="#F5C518" FontFamily="Segoe UI"/>
                                         <Button x:Name="btnRefreshModProfiles" Content="Osvjezi"
                                                 Style="{StaticResource BtnGhost}" HorizontalAlignment="Right"
                                                 VerticalAlignment="Center" Padding="16,8"/>
@@ -5789,20 +5255,8 @@ try {
                                 </StackPanel>
                             </Border>
 
-                            <Border CornerRadius="10" Padding="20"
-                                    BorderThickness="1" MinHeight="160">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#121212" Offset="0"/>
-                                        <GradientStop Color="#0d0d0d" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                                <Border.BorderBrush>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                        <GradientStop Color="#2a2a2a" Offset="0"/>
-                                        <GradientStop Color="#1a1a1a" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.BorderBrush>
+                            <Border Background="#111" CornerRadius="10" Padding="20"
+                                    BorderBrush="#222" BorderThickness="1" MinHeight="160">
                                 <StackPanel>
                                     <Grid Margin="0,0,0,10">
                                         <TextBlock Text="U ovom folderu" FontSize="15" FontWeight="SemiBold"
@@ -6445,28 +5899,15 @@ try {
     </Border>
 </Window>
 "@
-Write-BootLog "OK: XAML parsed"
-} catch {
-    $errMsg = "XAML [xml] cast greska: $($_.Exception.Message)"
-    Write-BootLog "FAIL: $errMsg"
-    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 } catch {}
-    try { Close-StartupSplash } catch {}
-    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Greska", "OK", "Error") | Out-Null
-    return
-}
 
 # ============================================================
 # CREATE WINDOW (splash ostaje otvoren do licence + preloada)
 # ============================================================
-Write-BootLog "START: Show-SplashScreen"
 $splashWin = Show-SplashScreen
 $splashWin.Show()
-Write-BootLog "OK: WPF Splash shown"
 Set-SplashStep "Ucitavam konfiguraciju..." 10
 try { Initialize-LauncherConfig } catch {}
-Write-BootLog "OK: Config loaded"
 try { Sync-SharedConfig } catch {}
-Write-BootLog "OK: SharedConfig synced"
 try {
     Ensure-ServerMpFolder | Out-Null
     $preloadMods = Get-EffectiveModsPath
@@ -6477,36 +5918,9 @@ try {
     }
 } catch {}
 
-Write-BootLog "OK: Pre-XAML preload done"
 Set-SplashStep "Ucitavam sucelje..." 28
-# Trap za hvatanje neobradjenih gresaka nakon XAML ucitavanja
-trap {
-    $errMsg = "PAD LAUNCHERA: $($_.Exception.ToString())`n`nLinija: $($_.InvocationInfo.ScriptLineNumber)"
-    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
-    try { Close-StartupSplash } catch {}
-    try { [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Greska", "OK", "Error") } catch {}
-    break
-}
-Write-BootLog "START: XamlReader.Load"
 $reader = New-Object System.Xml.XmlNodeReader $xaml
-try {
-    $window = [Windows.Markup.XamlReader]::Load($reader)
-} catch {
-    $errMsg = "XAML GRESKA: $($_.Exception.ToString())"
-    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
-    try { Close-StartupSplash } catch {}
-    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Greska", "OK", "Error") | Out-Null
-    return
-}
-if (-not $window) {
-    $errMsg = "XAML ucitavanje neuspjesno — window objekt je null."
-    Write-BootLog "FAIL: $errMsg"
-    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
-    try { Close-StartupSplash } catch {}
-    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Error", "OK", "Error") | Out-Null
-    return
-}
-Write-BootLog "OK: XAML loaded, window created"
+$window = [Windows.Markup.XamlReader]::Load($reader)
 Invoke-SplashPump
 
 # Postavi taskbar ikonu
@@ -6530,7 +5944,6 @@ try {
     }
 } catch {}
 
-Write-BootLog "START: FindName bindings"
 $titleBar            = $window.FindName("titleBar")
 $btnFullscreen       = $window.FindName("btnFullscreen")
 $btnMinimize         = $window.FindName("btnMinimize")
@@ -6582,7 +5995,8 @@ $txtServerModCount   = $window.FindName("txtServerModCount")
 $txtMissingCount     = $window.FindName("txtMissingCount")
 $txtModSizeTotal     = $window.FindName("txtModSizeTotal")
 $txtServerPing       = $window.FindName("txtServerPing")
-$dashStatusDot       = $window.FindName("dashStatusDot")
+$dashStatusBrush     = $window.FindName("dashStatusBrush")
+$dashStatusGlow      = $window.FindName("dashStatusGlow")
 $txtModSubtitle      = $window.FindName("txtModSubtitle")
 $txtModsLocal        = $window.FindName("txtModsLocal")
 $txtModsServer       = $window.FindName("txtModsServer")
@@ -6666,27 +6080,6 @@ $txtIgraSaveHint     = $window.FindName("txtIgraSaveHint")
 $btnRefreshSavegames = $window.FindName("btnRefreshSavegames")
 $btnOpenSaveSlot     = $window.FindName("btnOpenSaveSlot")
 $btnSaveWizard       = $window.FindName("btnSaveWizard")
-$wizStep1Indicator   = $window.FindName("wizStep1Indicator")
-$wizStep2Indicator   = $window.FindName("wizStep2Indicator")
-$wizStep3Indicator   = $window.FindName("wizStep3Indicator")
-$wizStep4Indicator   = $window.FindName("wizStep4Indicator")
-$wizStep5Indicator   = $window.FindName("wizStep5Indicator")
-$wizPage1            = $window.FindName("wizPage1")
-$wizPage2            = $window.FindName("wizPage2")
-$wizPage3            = $window.FindName("wizPage3")
-$wizPage4            = $window.FindName("wizPage4")
-$wizPage5            = $window.FindName("wizPage5")
-$txtWizModsPath      = $window.FindName("txtWizModsPath")
-$btnWizBrowseMods    = $window.FindName("btnWizBrowseMods")
-$txtWizSaveInfo      = $window.FindName("txtWizSaveInfo")
-$chkWizSkipIntro     = $window.FindName("chkWizSkipIntro")
-$chkWizBackup        = $window.FindName("chkWizBackup")
-$lstWizProfiles      = $window.FindName("lstWizProfiles")
-$txtWizSummary       = $window.FindName("txtWizSummary")
-$btnWizBack          = $window.FindName("btnWizBack")
-$btnWizNext          = $window.FindName("btnWizNext")
-$txtWizardSubtitle   = $window.FindName("txtWizardSubtitle")
-$modListGlowBorder   = $window.FindName("modListGlowBorder")
 $filterAll           = $window.FindName("filterAll")
 $filterServer        = $window.FindName("filterServer")
 $filterMissing       = $window.FindName("filterMissing")
@@ -6750,7 +6143,6 @@ try {
     if (-not $logoLoaded) { $imgLogo.Visibility = "Collapsed" }
 } catch { $imgLogo.Visibility = "Collapsed" }
 
-Write-BootLog "OK: FindName done, starting event handlers"
 # ============================================================
 # WINDOW CHROME
 # ============================================================
@@ -6786,8 +6178,6 @@ $window.Add_PreviewKeyDown({
     }
 })
 $btnClose.Add_Click({ $window.Close() })
-
-# Glow animacija uklonjena — DropShadowEffect modificiranje moze crashirati na nekim .NET 4.x verzijama
 
 # ============================================================
 # NAVIGATION
@@ -6852,7 +6242,6 @@ $navMods.Add_Checked({
 $navIgra.Add_Checked({
     Set-Page 'igra'
     Refresh-IgraPage
-    Set-WizardStep 1
 })
 $navMpFolders.Add_Checked({
     Set-Page 'mpfolders'
@@ -7193,222 +6582,7 @@ if ($chkHideWalkthrough) {
 }
 
 # ============================================================
-# INLINE SAVE WIZARD (5 koraka u tabu "Konfiguriraj save")
-# ============================================================
-$script:WizardState = @{
-    Step            = 1
-    SelectedSave    = $null
-    ModsPath        = if ($script:Config.modsPath) { [string]$script:Config.modsPath } else { '' }
-    ProfileId       = ''
-    ProfileLabel    = '(zadani SR profil)'
-    SkipGiantsIntro = $false
-    DoBackup        = $true
-}
-
-function Set-WizardStep {
-    param([int]$Step)
-    $script:WizardState.Step = $Step
-    $gold = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F5C518')
-    $done = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#30A46C')
-    $gray = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#333')
-    $darkFg = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#111')
-    $lightFg = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#888')
-    $activeLbl = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#aaa')
-    $inactiveLbl = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#666')
-    for ($i = 1; $i -le 5; $i++) {
-        $ind = (Get-Variable "wizStep${i}Indicator" -ValueOnly)
-        if (-not $ind) { continue }
-        $circle = $ind.Children[0]
-        $label = $ind.Children[1]
-        if ($i -lt $Step) {
-            $circle.Background = $done
-            $circle.Child.Foreground = $darkFg
-            $label.Foreground = $activeLbl
-        } elseif ($i -eq $Step) {
-            $circle.Background = $gold
-            $circle.Child.Foreground = $darkFg
-            $label.Foreground = $activeLbl
-        } else {
-            $circle.Background = $gray
-            $circle.Child.Foreground = $lightFg
-            $label.Foreground = $inactiveLbl
-        }
-    }
-    # Prikazi samo aktivnu stranicu
-    $wizPage1.Visibility = if ($Step -eq 1) { 'Visible' } else { 'Collapsed' }
-    $wizPage2.Visibility = if ($Step -eq 2) { 'Visible' } else { 'Collapsed' }
-    $wizPage3.Visibility = if ($Step -eq 3) { 'Visible' } else { 'Collapsed' }
-    $wizPage4.Visibility = if ($Step -eq 4) { 'Visible' } else { 'Collapsed' }
-    $wizPage5.Visibility = if ($Step -eq 5) { 'Visible' } else { 'Collapsed' }
-    $btnWizBack.Visibility = if ($Step -gt 1) { 'Visible' } else { 'Collapsed' }
-    $btnWizNext.Content = if ($Step -ge 5) { 'Primijeni' } else { 'Dalje' }
-    # Popuni sadrzaj za trenutni korak
-    switch ($Step) {
-        2 {
-            $txtWizModsPath.Text = $script:WizardState.ModsPath
-        }
-        3 {
-            $gs = Read-GameSettings
-            $script:WizardState.SkipGiantsIntro = -not [bool]$gs.introScene
-            $chkWizSkipIntro.IsChecked = $script:WizardState.SkipGiantsIntro
-            $chkWizBackup.IsChecked = $script:WizardState.DoBackup
-            if ($script:WizardState.SelectedSave) {
-                $sg = $script:WizardState.SelectedSave
-                $txtWizSaveInfo.Text = @(
-                    "Slot: $($sg.Slot)"
-                    "Naziv: $($sg.Name)"
-                    "Mapa: $($sg.MapTitle)"
-                    "Novac: $($sg.Money)"
-                    "Vrijeme igre: $($sg.PlayTime)"
-                    "Zadnja izmjena: $($sg.LastWrite)"
-                    "Velicina: $($sg.SizeMb) MB"
-                ) -join "`n"
-            } else {
-                $txtWizSaveInfo.Text = '(nema odabranog savea)'
-            }
-        }
-        4 {
-            Ensure-ServerModProfile | Out-Null
-            $profiles = @(Get-ModProfileList)
-            if ($profiles.Count -eq 0) {
-                $profiles = @([PSCustomObject]@{ Id = ''; Label = '(nema profila — koristi trenutni mods folder)' })
-            }
-            $lstWizProfiles.ItemsSource = $profiles
-            if ($script:WizardState.ProfileId) {
-                $sel = $profiles | Where-Object { $_.Id -eq $script:WizardState.ProfileId } | Select-Object -First 1
-                if ($sel) { $lstWizProfiles.SelectedItem = $sel }
-            } elseif ($profiles.Count -gt 0) {
-                $lstWizProfiles.SelectedIndex = 0
-            }
-        }
-        5 {
-            $sel = if ($script:WizardState.SelectedSave) { "Slot $($script:WizardState.SelectedSave.Slot) - $($script:WizardState.SelectedSave.Name)" } else { '(nije odabran)' }
-            $intro = if ($chkWizSkipIntro.IsChecked) { 'preskocen' } else { 'ukljucen' }
-            $bak = if ($chkWizBackup.IsChecked) { 'da' } else { 'ne' }
-            $prof = if ($script:WizardState.ProfileLabel) { $script:WizardState.ProfileLabel } else { '(zadani)' }
-            $txtWizSummary.Text = @(
-                "Save: $sel"
-                "Mod folder: $($script:WizardState.ModsPath)"
-                "Mod profil: $prof"
-                "Giants intro: $intro"
-                "Backup savea: $bak"
-                ""
-                "Klikni 'Primijeni' za spremanje promjena u gameSettings.xml"
-            ) -join "`n"
-        }
-    }
-}
-
-function Apply-InlineWizard {
-    $st = $script:WizardState
-    # Backup
-    if ($chkWizBackup.IsChecked -and $st.SelectedSave -and $st.SelectedSave.Folder -and (Test-Path $st.SelectedSave.Folder)) {
-        $bakRoot = Join-Path $env:APPDATA 'SR-Launcher\save-backups'
-        if (-not (Test-Path $bakRoot)) { New-Item -ItemType Directory -Path $bakRoot -Force | Out-Null }
-        $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-        $dest = Join-Path $bakRoot "savegame$($st.SelectedSave.Slot)_$stamp"
-        Copy-Item $st.SelectedSave.Folder $dest -Recurse -Force
-        Write-Log "Save wizard backup: $dest"
-    }
-    # Mods folder
-    if ($st.ModsPath) {
-        if (-not (Test-Path $st.ModsPath)) { New-Item -ItemType Directory -Path $st.ModsPath -Force | Out-Null }
-        $script:Config.modsPath = $st.ModsPath
-        if ($txtModsPath) { $txtModsPath.Text = $st.ModsPath }
-        Update-ModsDirectoryOverride $st.ModsPath | Out-Null
-    }
-    # Profil
-    if ($st.ProfileId) {
-        $store = Get-ModProfilesStore
-        if ($store.profiles -and $store.profiles.PSObject.Properties[$st.ProfileId]) {
-            $p = $store.profiles.($st.ProfileId)
-            if ($st.ModsPath) { $p.modsPath = $st.ModsPath }
-            $p.updatedAt = (Get-Date).ToString('o')
-            $store.activeProfileId = $st.ProfileId
-            Save-ModProfilesStore $store
-        }
-    }
-    # Intro scene
-    $skipIntro = [bool]$chkWizSkipIntro.IsChecked
-    $introVal = if ($skipIntro) { 'false' } else { 'true' }
-    Write-GameSetting 'isIntroActive' $introVal | Out-Null
-    if ($chkIntroScene) { $chkIntroScene.IsChecked = ($introVal -eq 'true') }
-    $script:Config | Add-Member -NotePropertyName launchSkipIntro -NotePropertyValue $skipIntro -Force
-    if ($chkLaunchSkipIntro) { $chkLaunchSkipIntro.IsChecked = $skipIntro }
-    Save-Config
-    Update-SidebarLibraryCounts
-    try { Show-Toast 'Save konfiguracija primijenjena!' 'success' 4500 } catch {}
-    # Resetiraj wizard na korak 1
-    $script:WizardState.Step = 1
-    $script:WizardState.SelectedSave = $null
-    Refresh-IgraPage
-    Set-WizardStep 1
-}
-
-# Wizard navigacija
-if ($btnWizBrowseMods) {
-    $btnWizBrowseMods.Add_Click({
-        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-        $fb = New-Object System.Windows.Forms.FolderBrowserDialog
-        $fb.Description = 'Odaberi FS25 mods folder'
-        if ($txtWizModsPath.Text) { $fb.SelectedPath = $txtWizModsPath.Text }
-        if ($fb.ShowDialog() -eq 'OK') { $txtWizModsPath.Text = $fb.SelectedPath }
-    })
-}
-
-if ($btnWizBack) {
-    $btnWizBack.Add_Click({
-        if ($script:WizardState.Step -gt 1) {
-            Set-WizardStep ($script:WizardState.Step - 1)
-        }
-    })
-}
-
-if ($btnWizNext) {
-    $btnWizNext.Add_Click({
-        $step = $script:WizardState.Step
-        # Validacija i spremanje podataka iz trenutnog koraka
-        if ($step -eq 1) {
-            if (-not $lstSavegames.SelectedItem) {
-                Show-SRDialog 'Odaberi savegame slot u listi.' 'Konfiguriraj save' 'Warning'
-                return
-            }
-            $script:WizardState.SelectedSave = $lstSavegames.SelectedItem
-        }
-        if ($step -eq 2) {
-            $script:WizardState.ModsPath = $txtWizModsPath.Text.Trim()
-            if ($script:WizardState.ModsPath -and -not (Test-Path $script:WizardState.ModsPath)) {
-                $r = Show-SRConfirm "Folder ne postoji:`n$($script:WizardState.ModsPath)`n`nNastaviti?" 'Konfiguriraj save' 'Da' 'Ne'
-                if ($r -ne 'Yes') { return }
-            }
-        }
-        if ($step -eq 3) {
-            $script:WizardState.SkipGiantsIntro = [bool]$chkWizSkipIntro.IsChecked
-            $script:WizardState.DoBackup = [bool]$chkWizBackup.IsChecked
-        }
-        if ($step -eq 4 -and $lstWizProfiles.SelectedItem) {
-            $pi = $lstWizProfiles.SelectedItem
-            $script:WizardState.ProfileId = if ($pi.Id) { [string]$pi.Id } else { '' }
-            $script:WizardState.ProfileLabel = if ($pi.Label) { [string]$pi.Label } else { $script:WizardState.ProfileId }
-            if ($pi.Mods -and -not $script:WizardState.ModsPath) {
-                $script:WizardState.ModsPath = [string]$pi.Mods
-                $txtWizModsPath.Text = $script:WizardState.ModsPath
-            }
-        }
-        if ($step -ge 5) {
-            try {
-                Apply-InlineWizard
-            } catch {
-                Show-SRDialog "Primjena nije uspjela:`n$($_.Exception.Message)" 'Konfiguriraj save' 'Warning'
-            }
-            return
-        }
-        Set-WizardStep ($step + 1)
-    })
-}
-
-# ============================================================
-# SAVE WIZARD (legacy dialog — zadrzano za kompatibilnost)
+# SAVE WIZARD (Konfiguriraj save — 7 koraka, hrvatski)
 # ============================================================
 function Show-SaveWizard {
     $dlg = New-Object System.Windows.Window
@@ -8120,11 +7294,7 @@ function Apply-ModFilter {
         if ($searchText) { $sub += " | pretraga: '$searchText'" }
         $txtModSubtitle.Text = $sub
     }
-    # Ucitaj thumbnailove samo ako jos nisu svi ucitani
-    $needsLoad = $false
-    foreach ($s in $sorted) { if (-not $s.HasThumb -and $s.LocalZipPath) { $needsLoad = $true; break } }
-    if ($needsLoad) { Start-ModThumbnailLoads -Items $sorted }
-    elseif ($lstMods) { try { $lstMods.Items.Refresh() } catch {} }
+    Start-ModThumbnailLoads -Items $sorted
 }
 
 # ============================================================
@@ -8139,12 +7309,8 @@ function Refresh-ServerStatus {
     if ($status.online) {
         $statusDot.Fill = $green
         if ($statusDotBig) { try { $statusDotBig.Fill = $green } catch {} }
-        if ($dashStatusDot) {
-            try {
-                $dashStatusDot.Background = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C"))
-                $dashStatusDot.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{ Color=[System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C"); BlurRadius=12; ShadowDepth=0; Opacity=0.7 }
-            } catch {}
-        }
+        if ($dashStatusBrush) { $dashStatusBrush.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C") }
+        if ($dashStatusGlow)  { $dashStatusGlow.Color  = [System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C") }
         $txtStatus.Text = "ONLINE"
         $txtStatus.Foreground = $green
         $txtServerName.Text = $status.name
@@ -8187,12 +7353,8 @@ function Refresh-ServerStatus {
     } else {
         $statusDot.Fill = $red
         if ($statusDotBig) { try { $statusDotBig.Fill = $red } catch {} }
-        if ($dashStatusDot) {
-            try {
-                $dashStatusDot.Background = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D"))
-                $dashStatusDot.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{ Color=[System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D"); BlurRadius=12; ShadowDepth=0; Opacity=0.7 }
-            } catch {}
-        }
+        if ($dashStatusBrush) { $dashStatusBrush.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D") }
+        if ($dashStatusGlow)  { $dashStatusGlow.Color  = [System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D") }
         $txtStatus.Text = "OFFLINE"
         $txtStatus.Foreground = $red
         $server = Get-ActiveServer
@@ -10194,7 +9356,6 @@ function Ensure-LicenseValid {
 }
 
 # Licenca + mrezni preload (splash jos vidljiv - bez praznog ekrana prije glavnog prozora)
-Write-BootLog "START: FindName + event handlers done, starting preload"
 Set-SplashStep "Provjera licence..." 45
 if (-not (Ensure-LicenseValid)) {
     Close-StartupSplash
@@ -10202,37 +9363,16 @@ if (-not (Ensure-LicenseValid)) {
     return
 }
 
-Write-BootLog "OK: License valid"
 Set-SplashStep "Sinkronizacija servera..." 58
 try { $script:PreloadedServerStatus = Get-ServerStatus } catch {}
-Write-BootLog "OK: Server status done"
 
 Set-SplashStep "Provjera modova..." 74
 try { $script:PreloadedModList = Get-ServerModList } catch {}
-Write-BootLog "OK: Mod list done"
 
-Set-SplashStep "Ucitavam opcije igre..." 78
+Set-SplashStep "Ucitavam opcije igre..." 86
 try { $script:PreloadedGameSettings = Read-GameSettings } catch {}
-Write-BootLog "OK: Game settings done"
 Invoke-SplashPump
-
-Set-SplashStep "Skeniram lokalne modove..." 86
-try {
-    $modPath = Get-EffectiveModsPath
-    if ($modPath -and (Test-Path $modPath)) {
-        $script:PreloadedLocalMods = @(Get-ChildItem $modPath -Filter "*.zip" -File -ErrorAction SilentlyContinue)
-        $script:PreloadedLocalModCount = $script:PreloadedLocalMods.Count
-    }
-} catch {}
-Invoke-SplashPump
-
-Set-SplashStep "Ucitavam savegame slotove..." 92
-try { $script:PreloadedSavegames = Get-FS25SavegameList } catch {}
-Write-BootLog "OK: Savegames done"
-Invoke-SplashPump
-
 Set-SplashStep "Pokrecem..." 100
-Write-BootLog "START: Initialize lifecycle + show window"
 Initialize-WpfApplicationLifecycle
 
 # ============================================================
@@ -10290,35 +9430,22 @@ try {
     }
 } catch {}
 
-# Dispatcher unhandled exception handler — sprijecava tiho gasenje aplikacije
+# WPF DispatcherUnhandledException — sprijecava tiho gasenje aplikacije
 try {
-    $window.Dispatcher.Add_UnhandledException({
-        param($s, $e)
-        try { Write-Log "WPF UNHANDLED: $($e.Exception.ToString())" } catch {}
-        try { Write-BootLog "WPF UNHANDLED: $($e.Exception.Message)" } catch {}
-        try { "WPF UNHANDLED: $($e.Exception.ToString())" | Add-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
-        $e.Handled = $true
-    })
+    $app = [System.Windows.Application]::Current
+    if ($app) {
+        $app.Add_DispatcherUnhandledException({
+            param($s, $e)
+            try { Write-Log "WPF UNHANDLED: $($e.Exception.ToString())" } catch {}
+            $e.Handled = $true
+        })
+    }
 } catch {}
 
 # Prikaži glavni prozor prije zatvaranja splasha (inače OnLastWindowClose može ugasiti app).
-Write-BootLog "START: window.Show()"
-try {
-    $window.Show()
-    Write-BootLog "OK: window.Show() succeeded"
-    Close-StartupSplash
-    Write-BootLog "OK: Splash closed, main window visible"
-} catch {
-    try { Close-StartupSplash } catch {}
-    $errMsg = "Greska pri otvaranju prozora: $($_.Exception.ToString())"
-    Write-BootLog "FAIL: $errMsg"
-    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
-    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Error", "OK", "Error") | Out-Null
-    return
-}
+$window.Show()
+Close-StartupSplash
 # DispatcherFrame umjesto ShowDialog — ShowDialog baca gresku na vec prikazanom prozoru
-Write-BootLog "START: PushFrame (event loop)"
 $script:_mainFrame = [System.Windows.Threading.DispatcherFrame]::new()
 $window.Add_Closed({ $script:_mainFrame.Continue = $false })
 [System.Windows.Threading.Dispatcher]::PushFrame($script:_mainFrame)
-Write-BootLog "END: Window closed, exiting"
