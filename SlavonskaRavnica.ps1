@@ -9293,10 +9293,13 @@ function Show-LicenseWindow {
             $script:_licOkt.Text = "Licenca aktivirana. Pokrecem launcher..."
             $script:_licOkt.Visibility = "Visible"
             $script:_licWin.Tag = "ok"
-            $tmr = New-Object System.Windows.Threading.DispatcherTimer
-            $tmr.Interval = [TimeSpan]::FromMilliseconds(700)
-            $tmr.Add_Tick({ $tmr.Stop(); try { $script:_licWin.Close() } catch {} })
-            $tmr.Start()
+            $script:_licCloseTimer = New-Object System.Windows.Threading.DispatcherTimer
+            $script:_licCloseTimer.Interval = [TimeSpan]::FromMilliseconds(700)
+            $script:_licCloseTimer.Add_Tick({
+                try { $script:_licCloseTimer.Stop() } catch {}
+                try { $script:_licWin.Close() } catch {}
+            })
+            $script:_licCloseTimer.Start()
         }) | Out-Null
     })
     $licWin.ShowDialog() | Out-Null
@@ -9443,9 +9446,23 @@ try {
 } catch {}
 
 # Prikaži glavni prozor prije zatvaranja splasha (inače OnLastWindowClose može ugasiti app).
-$window.Show()
-Close-StartupSplash
+Write-BootLog "START: window.Show()"
+try {
+    $window.Show()
+    Write-BootLog "OK: window.Show() succeeded"
+    Close-StartupSplash
+    Write-BootLog "OK: Splash closed"
+} catch {
+    try { Close-StartupSplash } catch {}
+    $errMsg = "Greska pri otvaranju prozora: $($_.Exception.ToString())"
+    Write-BootLog "FAIL: $errMsg"
+    try { $errMsg | Set-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+    [System.Windows.MessageBox]::Show($errMsg, "Slavonska Ravnica - Error", "OK", "Error") | Out-Null
+    return
+}
 # DispatcherFrame umjesto ShowDialog — ShowDialog baca gresku na vec prikazanom prozoru
+Write-BootLog "START: PushFrame (event loop)"
 $script:_mainFrame = [System.Windows.Threading.DispatcherFrame]::new()
 $window.Add_Closed({ $script:_mainFrame.Continue = $false })
 [System.Windows.Threading.Dispatcher]::PushFrame($script:_mainFrame)
+Write-BootLog "END: Window closed"
