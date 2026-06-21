@@ -3351,47 +3351,12 @@ $script:PreloadedLocalModCount = $null
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="bd" Background="{TemplateBinding Background}"
-                                CornerRadius="8" Padding="{TemplateBinding Padding}" BorderThickness="0"
-                                RenderTransformOrigin="0.5,0.5">
-                            <Border.RenderTransform>
-                                <ScaleTransform x:Name="bpScale" ScaleX="1" ScaleY="1"/>
-                            </Border.RenderTransform>
-                            <Border.Effect>
-                                <DropShadowEffect x:Name="bpGlow" Color="#F5C518" BlurRadius="22" ShadowDepth="0" Opacity="0"/>
-                            </Border.Effect>
+                                CornerRadius="8" Padding="{TemplateBinding Padding}" BorderThickness="0">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="bd" Property="Background" Value="{StaticResource GoldBright}"/>
-                                <Trigger.EnterActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="bpGlow" Storyboard.TargetProperty="Opacity"
-                                                             To="0.75" Duration="0:0:0.25"/>
-                                            <DoubleAnimation Storyboard.TargetName="bpScale" Storyboard.TargetProperty="ScaleX"
-                                                             To="1.03" Duration="0:0:0.18">
-                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
-                                            </DoubleAnimation>
-                                            <DoubleAnimation Storyboard.TargetName="bpScale" Storyboard.TargetProperty="ScaleY"
-                                                             To="1.03" Duration="0:0:0.18">
-                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
-                                            </DoubleAnimation>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.EnterActions>
-                                <Trigger.ExitActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="bpGlow" Storyboard.TargetProperty="Opacity"
-                                                             To="0" Duration="0:0:0.25"/>
-                                            <DoubleAnimation Storyboard.TargetName="bpScale" Storyboard.TargetProperty="ScaleX"
-                                                             To="1" Duration="0:0:0.2"/>
-                                            <DoubleAnimation Storyboard.TargetName="bpScale" Storyboard.TargetProperty="ScaleY"
-                                                             To="1" Duration="0:0:0.2"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.ExitActions>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="bd" Property="Background" Value="{StaticResource GoldDim}"/>
@@ -3420,31 +3385,12 @@ $script:PreloadedLocalModCount = $null
                         <Border x:Name="bd" Background="{TemplateBinding Background}"
                                 CornerRadius="8" Padding="{TemplateBinding Padding}"
                                 BorderThickness="1" BorderBrush="#333">
-                            <Border.Effect>
-                                <DropShadowEffect x:Name="bgGlow" Color="#F5C518" BlurRadius="14" ShadowDepth="0" Opacity="0"/>
-                            </Border.Effect>
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="bd" Property="Background" Value="#1a1a1a"/>
                                 <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Gold}"/>
-                                <Trigger.EnterActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="bgGlow" Storyboard.TargetProperty="Opacity"
-                                                             To="0.45" Duration="0:0:0.22"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.EnterActions>
-                                <Trigger.ExitActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="bgGlow" Storyboard.TargetProperty="Opacity"
-                                                             To="0" Duration="0:0:0.22"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.ExitActions>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="bd" Property="Background" Value="#222"/>
@@ -3540,7 +3486,7 @@ $script:PreloadedLocalModCount = $null
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="FontFamily" Value="Segoe UI"/>
             <Setter Property="CaretBrush" Value="{StaticResource Gold}"/>
-            <Setter Property="SelectionBrush" Value="{StaticResource GoldDim}"/>
+            <!-- SelectionBrush maknuto — ne postoji na starijim .NET verzijama -->
             <Setter Property="MinHeight" Value="36"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -3809,7 +3755,7 @@ $script:PreloadedLocalModCount = $null
                                 Padding="{TemplateBinding Padding}" CornerRadius="6" Margin="0,2"
                                 RenderTransformOrigin="0.5,0.5">
                             <Border.RenderTransform>
-                                <TranslateTransform x:Name="navTrans" X="0"/>
+                                <TranslateTransform X="0"/>
                             </Border.RenderTransform>
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -3820,7 +3766,7 @@ $script:PreloadedLocalModCount = $null
                                         Background="Transparent" Margin="0,0,10,0" VerticalAlignment="Stretch"
                                         RenderTransformOrigin="0.5,0.5">
                                     <Border.RenderTransform>
-                                        <ScaleTransform x:Name="indScale" ScaleY="0"/>
+                                        <ScaleTransform ScaleY="1"/>
                                     </Border.RenderTransform>
                                 </Border>
                                 <ContentPresenter Grid.Column="1" VerticalAlignment="Center"/>
@@ -3832,59 +3778,12 @@ $script:PreloadedLocalModCount = $null
                                 <Setter TargetName="indicator" Property="Background" Value="{StaticResource Gold}"/>
                                 <Setter Property="Foreground" Value="{StaticResource Gold}"/>
                                 <Setter Property="FontWeight" Value="SemiBold"/>
-                                <Setter TargetName="indicator" Property="Effect">
-                                    <Setter.Value>
-                                        <DropShadowEffect Color="#F5C518" BlurRadius="10" ShadowDepth="0" Opacity="0.85"/>
-                                    </Setter.Value>
-                                </Setter>
-                                <Trigger.EnterActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="indScale"
-                                                             Storyboard.TargetProperty="ScaleY"
-                                                             From="0" To="1" Duration="0:0:0.25">
-                                                <DoubleAnimation.EasingFunction>
-                                                    <CubicEase EasingMode="EaseOut"/>
-                                                </DoubleAnimation.EasingFunction>
-                                            </DoubleAnimation>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.EnterActions>
-                                <Trigger.ExitActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="indScale"
-                                                             Storyboard.TargetProperty="ScaleY"
-                                                             To="0" Duration="0:0:0.15"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.ExitActions>
+                                <!-- Animacije i Effect maknuti — pada na .NET 4.x -->
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="bd" Property="Background" Value="#151515"/>
                                 <Setter Property="Foreground" Value="#ddd"/>
-                                <Trigger.EnterActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="navTrans"
-                                                             Storyboard.TargetProperty="X"
-                                                             To="3" Duration="0:0:0.18">
-                                                <DoubleAnimation.EasingFunction>
-                                                    <CubicEase EasingMode="EaseOut"/>
-                                                </DoubleAnimation.EasingFunction>
-                                            </DoubleAnimation>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.EnterActions>
-                                <Trigger.ExitActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="navTrans"
-                                                             Storyboard.TargetProperty="X"
-                                                             To="0" Duration="0:0:0.18"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.ExitActions>
+                                <!-- Animacija navTrans maknuta — pada na .NET 4.x -->
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -4131,7 +4030,7 @@ $script:PreloadedLocalModCount = $null
                         </RadialGradientBrush>
                     </Ellipse.Fill>
                     <Ellipse.RenderTransform>
-                        <TranslateTransform x:Name="bgT1" X="0" Y="0"/>
+                        <TranslateTransform X="0" Y="0"/>
                     </Ellipse.RenderTransform>
                 </Ellipse>
                 <Ellipse Width="640" Height="640" Canvas.Left="540" Canvas.Top="220" Opacity="0.05">
@@ -4142,7 +4041,7 @@ $script:PreloadedLocalModCount = $null
                         </RadialGradientBrush>
                     </Ellipse.Fill>
                     <Ellipse.RenderTransform>
-                        <TranslateTransform x:Name="bgT2" X="0" Y="0"/>
+                        <TranslateTransform X="0" Y="0"/>
                     </Ellipse.RenderTransform>
                 </Ellipse>
                 <Ellipse Width="380" Height="380" Canvas.Left="200" Canvas.Top="450" Opacity="0.04">
@@ -4153,29 +4052,10 @@ $script:PreloadedLocalModCount = $null
                         </RadialGradientBrush>
                     </Ellipse.Fill>
                     <Ellipse.RenderTransform>
-                        <TranslateTransform x:Name="bgT3" X="0" Y="0"/>
+                        <TranslateTransform X="0" Y="0"/>
                     </Ellipse.RenderTransform>
                 </Ellipse>
-                <Canvas.Triggers>
-                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                        <BeginStoryboard>
-                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
-                                <DoubleAnimation Storyboard.TargetName="bgT1" Storyboard.TargetProperty="X"
-                                                 From="0" To="120" Duration="0:0:32"/>
-                                <DoubleAnimation Storyboard.TargetName="bgT1" Storyboard.TargetProperty="Y"
-                                                 From="0" To="90" Duration="0:0:38"/>
-                                <DoubleAnimation Storyboard.TargetName="bgT2" Storyboard.TargetProperty="X"
-                                                 From="0" To="-140" Duration="0:0:40"/>
-                                <DoubleAnimation Storyboard.TargetName="bgT2" Storyboard.TargetProperty="Y"
-                                                 From="0" To="-100" Duration="0:0:36"/>
-                                <DoubleAnimation Storyboard.TargetName="bgT3" Storyboard.TargetProperty="X"
-                                                 From="0" To="100" Duration="0:0:42"/>
-                                <DoubleAnimation Storyboard.TargetName="bgT3" Storyboard.TargetProperty="Y"
-                                                 From="0" To="-120" Duration="0:0:44"/>
-                            </Storyboard>
-                        </BeginStoryboard>
-                    </EventTrigger>
-                </Canvas.Triggers>
+                <!-- Animacije maknute — EventTrigger na Freezable objektima pada na .NET 4.x -->
             </Canvas>
 
             <!-- TOAST OVERLAY -->
@@ -4480,30 +4360,7 @@ $script:PreloadedLocalModCount = $null
                                                 <Border.Effect>
                                                     <DropShadowEffect x:Name="dashStatusGlow" Color="#E5484D" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
                                                 </Border.Effect>
-                                                <Border.Triggers>
-                                                    <EventTrigger RoutedEvent="Border.Loaded">
-                                                        <BeginStoryboard>
-                                                            <Storyboard RepeatBehavior="Forever">
-                                                                <DoubleAnimation Storyboard.TargetName="dashStatusGlow"
-                                                                                 Storyboard.TargetProperty="BlurRadius"
-                                                                                 From="12" To="22" Duration="0:0:1.6"
-                                                                                 AutoReverse="True">
-                                                                    <DoubleAnimation.EasingFunction>
-                                                                        <SineEase EasingMode="EaseInOut"/>
-                                                                    </DoubleAnimation.EasingFunction>
-                                                                </DoubleAnimation>
-                                                                <DoubleAnimation Storyboard.TargetName="dashStatusGlow"
-                                                                                 Storyboard.TargetProperty="Opacity"
-                                                                                 From="0.55" To="0.95" Duration="0:0:1.6"
-                                                                                 AutoReverse="True">
-                                                                    <DoubleAnimation.EasingFunction>
-                                                                        <SineEase EasingMode="EaseInOut"/>
-                                                                    </DoubleAnimation.EasingFunction>
-                                                                </DoubleAnimation>
-                                                            </Storyboard>
-                                                        </BeginStoryboard>
-                                                    </EventTrigger>
-                                                </Border.Triggers>
+                                                <!-- Glow animacija maknuta — pada na .NET 4.x -->
                                             </Border>
                                             <Ellipse x:Name="statusDotBig" Visibility="Collapsed"/>
                                             <TextBlock x:Name="txtServerName" Text="Ucitavam..."
@@ -7335,8 +7192,8 @@ function Refresh-ServerStatus {
     if ($status.online) {
         $statusDot.Fill = $green
         if ($statusDotBig) { try { $statusDotBig.Fill = $green } catch {} }
-        if ($dashStatusBrush) { $dashStatusBrush.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C") }
-        if ($dashStatusGlow)  { $dashStatusGlow.Color  = [System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C") }
+        if ($dashStatusBrush) { try { $dashStatusBrush.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C") } catch {} }
+        if ($dashStatusGlow)  { try { $dashStatusGlow.Color  = [System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C") } catch {} }
         $txtStatus.Text = "ONLINE"
         $txtStatus.Foreground = $green
         $txtServerName.Text = $status.name
@@ -7379,8 +7236,8 @@ function Refresh-ServerStatus {
     } else {
         $statusDot.Fill = $red
         if ($statusDotBig) { try { $statusDotBig.Fill = $red } catch {} }
-        if ($dashStatusBrush) { $dashStatusBrush.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D") }
-        if ($dashStatusGlow)  { $dashStatusGlow.Color  = [System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D") }
+        if ($dashStatusBrush) { try { $dashStatusBrush.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D") } catch {} }
+        if ($dashStatusGlow)  { try { $dashStatusGlow.Color  = [System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D") } catch {} }
         $txtStatus.Text = "OFFLINE"
         $txtStatus.Foreground = $red
         $server = Get-ActiveServer
