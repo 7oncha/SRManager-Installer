@@ -5760,8 +5760,31 @@ $script:PreloadedLocalModCount = $null
             <!-- BOTTOM BAR -->
             <Border Grid.Row="1" VerticalAlignment="Bottom" Background="#0d0d0d"
                     Padding="16,8" Margin="218,0,0,0">
-                <TextBlock x:Name="txtProgress" Text="" FontSize="11"
-                           Foreground="#F5C518" FontFamily="Segoe UI" HorizontalAlignment="Right"/>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <!-- Download progress panel (vidljiv samo za vrijeme skidanja) -->
+                    <StackPanel x:Name="dlPanel" Grid.Row="0" Visibility="Collapsed" Margin="0,0,0,4">
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="txtDlName" Text="" FontSize="11"
+                                       Foreground="#eee" FontFamily="Segoe UI" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="txtDlStats" Grid.Column="1" Text="" FontSize="11"
+                                       Foreground="#F5C518" FontFamily="Segoe UI" Margin="12,0,0,0"/>
+                        </Grid>
+                        <Border Background="#222" CornerRadius="3" Height="6">
+                            <Border x:Name="dlBarFill" Background="#F5C518" CornerRadius="3"
+                                    HorizontalAlignment="Left" Width="0"/>
+                        </Border>
+                    </StackPanel>
+                    <TextBlock x:Name="txtProgress" Grid.Row="1" Text="" FontSize="11"
+                               Foreground="#F5C518" FontFamily="Segoe UI" HorizontalAlignment="Right"/>
+                </Grid>
             </Border>
         </Grid>
     </Border>
@@ -5951,6 +5974,10 @@ $btnChangeAdminPass  = $window.FindName("btnChangeAdminPass")
 $txtLog              = $window.FindName("txtLog")
 $btnClearLog         = $window.FindName("btnClearLog")
 $txtProgress         = $window.FindName("txtProgress")
+$dlPanel             = $window.FindName("dlPanel")
+$txtDlName           = $window.FindName("txtDlName")
+$txtDlStats          = $window.FindName("txtDlStats")
+$dlBarFill           = $window.FindName("dlBarFill")
 $chkIntroScene       = $window.FindName("chkIntroScene")
 $chkDevConsole       = $window.FindName("chkDevConsole")
 $btnSaveGameOptions  = $window.FindName("btnSaveGameOptions")
@@ -7531,8 +7558,15 @@ function Download-MissingMods {
     }
 
     Write-Log "Skidam $($missingItems.Count) modova..."
-    $txtProgress.Text = "Skidam modove..."
     $downloaded = 0
+    $totalMods = $missingItems.Count
+
+    # Prikazi download panel
+    if ($dlPanel) { $dlPanel.Visibility = "Visible" }
+    $txtProgress.Text = "Skidam $totalMods modova..."
+
+    # Sirina progress bara (roditelj Border)
+    $barMaxWidth = 0
 
     foreach ($item in $missingItems) {
         $lookup = if ($item.ZipName) { $item.ZipName } else { $item.Name }
@@ -7544,14 +7578,89 @@ function Download-MissingMods {
         }
 
         $dest = Join-Path $modsPath $modEntry.Name
+        $modIdx = $downloaded + 1
         try {
             Write-Log "  Skidam: $($modEntry.Name)..."
-            $txtProgress.Text = "$($modEntry.Name) ($($downloaded+1)/$($missingItems.Count))"
-            $window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
 
+            # Async download s progress eventima
             $wc = New-Object System.Net.WebClient
-            $wc.DownloadFile($modEntry.Url, $dest)
+            $script:_dlDone = $false
+            $script:_dlError = $null
+            $script:_dlPct = 0
+            $script:_dlReceived = 0
+            $script:_dlTotal = 0
+            $script:_dlStartTime = [DateTime]::Now
+
+            # Progress changed event
+            $progressHandler = Register-ObjectEvent -InputObject $wc -EventName DownloadProgressChanged -Action {
+                $script:_dlPct      = $EventArgs.ProgressPercentage
+                $script:_dlReceived = $EventArgs.BytesReceived
+                $script:_dlTotal    = $EventArgs.TotalBytesToReceive
+            }
+
+            # Completed event
+            $completedHandler = Register-ObjectEvent -InputObject $wc -EventName DownloadFileCompleted -Action {
+                if ($EventArgs.Error) { $script:_dlError = $EventArgs.Error.Message }
+                $script:_dlDone = $true
+            }
+
+            $wc.DownloadFileAsync([Uri]$modEntry.Url, $dest)
+
+            # Pumpa UI dok ceka download
+            while (-not $script:_dlDone) {
+                # Azuriraj UI
+                if ($dlPanel) {
+                    $pct = $script:_dlPct
+                    $recv = $script:_dlReceived
+                    $total = $script:_dlTotal
+                    $elapsed = ([DateTime]::Now - $script:_dlStartTime).TotalSeconds
+
+                    # Brzina i ETA
+                    $speed = if ($elapsed -gt 0.5) { $recv / $elapsed } else { 0 }
+                    $speedStr = if ($speed -gt 1MB) { "{0:N1} MB/s" -f ($speed / 1MB) }
+                                elseif ($speed -gt 1KB) { "{0:N0} KB/s" -f ($speed / 1KB) }
+                                else { "" }
+                    $etaStr = ""
+                    if ($speed -gt 0 -and $total -gt 0) {
+                        $remaining = ($total - $recv) / $speed
+                        if ($remaining -lt 60) { $etaStr = "~{0:N0}s" -f $remaining }
+                        else { $etaStr = "~{0:N0}m {1:N0}s" -f [math]::Floor($remaining / 60), ($remaining % 60) }
+                    }
+
+                    $sizeStr = if ($total -gt 0) { "{0:N1}/{1:N1} MB" -f ($recv / 1MB), ($total / 1MB) } else { "{0:N1} MB" -f ($recv / 1MB) }
+
+                    $txtDlName.Text = "$($modEntry.Name) ($modIdx/$totalMods)"
+                    $parts = @($sizeStr)
+                    if ($pct -gt 0) { $parts += "$pct%" }
+                    if ($speedStr) { $parts += $speedStr }
+                    if ($etaStr) { $parts += $etaStr }
+                    $txtDlStats.Text = $parts -join " | "
+
+                    # Progress bar sirina
+                    if ($barMaxWidth -le 0 -and $dlBarFill.Parent) {
+                        $barMaxWidth = $dlBarFill.Parent.ActualWidth
+                    }
+                    if ($barMaxWidth -gt 0 -and $total -gt 0) {
+                        $dlBarFill.Width = [math]::Max(1, ($pct / 100.0) * $barMaxWidth)
+                    }
+                }
+
+                # Pumpa WPF poruke da UI ostane responsivan
+                $window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
+                Start-Sleep -Milliseconds 80
+            }
+
+            # Cleanup eventi
+            Unregister-Event -SourceIdentifier $progressHandler.Name -ErrorAction SilentlyContinue
+            Unregister-Event -SourceIdentifier $completedHandler.Name -ErrorAction SilentlyContinue
+            Remove-Job -Id $progressHandler.Id -Force -ErrorAction SilentlyContinue
+            Remove-Job -Id $completedHandler.Id -Force -ErrorAction SilentlyContinue
             $wc.Dispose()
+
+            if ($script:_dlError) {
+                Write-Log "  GRESKA: $($modEntry.Name) - $($script:_dlError)"
+                continue
+            }
 
             if (Test-Path $dest) {
                 $size = "{0:N1} MB" -f ((Get-Item $dest).Length / 1MB)
@@ -7563,9 +7672,12 @@ function Download-MissingMods {
         }
     }
 
+    # Sakrij download panel
+    if ($dlPanel) { $dlPanel.Visibility = "Collapsed" }
+    if ($dlBarFill) { $dlBarFill.Width = 0 }
     $txtProgress.Text = ""
-    Write-Log "Zavrseno! $downloaded/$($missingItems.Count) skinuto."
-    Show-SRDialog "Skinuto $downloaded od $($missingItems.Count) modova!" "SR Launcher" "Success"
+    Write-Log "Zavrseno! $downloaded/$totalMods skinuto."
+    Show-SRDialog "Skinuto $downloaded od $totalMods modova!" "SR Launcher" "Success"
     Refresh-ModList
 }
 
