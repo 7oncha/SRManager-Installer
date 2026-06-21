@@ -5,14 +5,25 @@
 # GitHub Auto-Update | Multi-Server | Admin/Player | Mod Sync
 # ============================================================
 
-# Dijagnosticki boot log
-$script:BootLogPath = Join-Path $PSScriptRoot "sr_boot.log"
+# Dijagnosticki boot log — pokusaj $PSScriptRoot, fallback na $env:TEMP
+$script:BootLogPath = $null
+foreach ($tryDir in @($PSScriptRoot, $env:TEMP, $env:LOCALAPPDATA)) {
+    if ($tryDir) {
+        $tryPath = Join-Path $tryDir "sr_boot.log"
+        try {
+            "=== SR Manager Boot $(Get-Date -f 'yyyy-MM-dd HH:mm:ss') ===" | Set-Content -LiteralPath $tryPath -Encoding UTF8 -ErrorAction Stop
+            $script:BootLogPath = $tryPath
+            break
+        } catch {}
+    }
+}
 function Write-BootLog {
     param([string]$Msg)
-    try { "$(Get-Date -f 'HH:mm:ss.fff') $Msg" | Add-Content -LiteralPath $script:BootLogPath -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+    if ($script:BootLogPath) {
+        try { "$(Get-Date -f 'HH:mm:ss.fff') $Msg" | Add-Content -LiteralPath $script:BootLogPath -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+    }
 }
-try { "=== SR Manager Boot $(Get-Date -f 'yyyy-MM-dd HH:mm:ss') ===" | Set-Content -LiteralPath $script:BootLogPath -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
-Write-BootLog "START: Script poceo"
+Write-BootLog "START: Script poceo (log=$($script:BootLogPath))"
 
 # TEST-POKRENI.bat postavlja SR_MANAGER_TEST=1 - ne skrivaj konzolu (dijagnostika)
 $script:IsTestLaunch = ($env:SR_MANAGER_TEST -eq '1')
@@ -5919,8 +5930,23 @@ try {
 } catch {}
 
 Set-SplashStep "Ucitavam sucelje..." 28
+Write-BootLog "START: XamlReader.Load"
 $reader = New-Object System.Xml.XmlNodeReader $xaml
-$window = [Windows.Markup.XamlReader]::Load($reader)
+try {
+    $window = [Windows.Markup.XamlReader]::Load($reader)
+} catch {
+    $ex = $_.Exception
+    $chain = ""
+    while ($ex) { $chain += "$($ex.GetType().Name): $($ex.Message)`n"; $ex = $ex.InnerException }
+    Write-BootLog "FAIL: XAML parse error:`n$chain"
+    $errFile = Join-Path $PSScriptRoot "sr_xaml_error.log"
+    try { $chain | Set-Content -LiteralPath $errFile -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+    try { $chain | Set-Content -LiteralPath (Join-Path $env:TEMP "sr_xaml_error.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+    try { Close-StartupSplash } catch { try { Close-EarlySplash } catch {} }
+    [System.Windows.MessageBox]::Show("XAML greska:`n$chain", "SR Manager", "OK", "Error") | Out-Null
+    return
+}
+Write-BootLog "OK: XAML parsed"
 Invoke-SplashPump
 
 # Postavi taskbar ikonu
