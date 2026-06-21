@@ -57,6 +57,13 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 ; ============================================================
 Section "Instaliraj" SecInstall
     SetOutPath "$INSTDIR"
+    SetOverwrite on
+
+    ; Zatvori pokrenute instance prije instalacije (sprijecava file lock)
+    nsExec::ExecToLog 'cmd /c taskkill /F /IM "SRManager.exe" 2>nul & exit /b 0'
+    nsExec::ExecToLog 'cmd /c taskkill /F /FI "WINDOWTITLE eq Slavonska Ravnica*" 2>nul & exit /b 0'
+    nsExec::ExecToLog 'cmd /c taskkill /F /FI "WINDOWTITLE eq SR Manager*" 2>nul & exit /b 0'
+    Sleep 1500
 
     ; Glavne datoteke
     File "SlavonskaRavnica.ps1"
