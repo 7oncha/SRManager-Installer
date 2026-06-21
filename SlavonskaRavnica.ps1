@@ -3441,19 +3441,16 @@ function Set-SplashStep {
     Invoke-SplashPump
 }
 
-# WPF default ShutdownMode=OnLastWindowClose gasi proces kad se splash zatvori.
-# PowerShell NE kreira Application objekt automatski — moramo ga sami kreirati.
+# Postavi ShutdownMode ako Application postoji (ne kreiraj novi — moze uzrokovati hang).
 function Initialize-WpfApplicationLifecycle {
     try {
         $app = [System.Windows.Application]::Current
-        if (-not $app) {
-            Write-BootLog "WARN: Application.Current je null — kreiram novi Application objekt"
-            $app = New-Object System.Windows.Application
+        if ($app) {
             $app.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
+            Write-BootLog "OK: ShutdownMode = OnExplicitShutdown"
         } else {
-            $app.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
+            Write-BootLog "INFO: Application.Current je null — DispatcherFrame drzi proces"
         }
-        Write-BootLog "OK: ShutdownMode = OnExplicitShutdown"
     } catch {
         Write-BootLog "WARN: Initialize-WpfApplicationLifecycle greska: $($_.Exception.Message)"
     }
@@ -4701,33 +4698,11 @@ try {
                                             <Border x:Name="dashStatusDot" Width="14" Height="14" CornerRadius="7"
                                                     VerticalAlignment="Center" Margin="0,0,12,0">
                                                 <Border.Background>
-                                                    <SolidColorBrush x:Name="dashStatusBrush" Color="#E5484D"/>
+                                                    <SolidColorBrush Color="#E5484D"/>
                                                 </Border.Background>
                                                 <Border.Effect>
                                                     <DropShadowEffect Color="#E5484D" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
                                                 </Border.Effect>
-                                                <Border.Triggers>
-                                                    <EventTrigger RoutedEvent="Border.Loaded">
-                                                        <BeginStoryboard>
-                                                            <Storyboard RepeatBehavior="Forever">
-                                                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.Effect).(DropShadowEffect.BlurRadius)"
-                                                                                 From="12" To="22" Duration="0:0:1.6"
-                                                                                 AutoReverse="True">
-                                                                    <DoubleAnimation.EasingFunction>
-                                                                        <SineEase EasingMode="EaseInOut"/>
-                                                                    </DoubleAnimation.EasingFunction>
-                                                                </DoubleAnimation>
-                                                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.Effect).(DropShadowEffect.Opacity)"
-                                                                                 From="0.55" To="0.95" Duration="0:0:1.6"
-                                                                                 AutoReverse="True">
-                                                                    <DoubleAnimation.EasingFunction>
-                                                                        <SineEase EasingMode="EaseInOut"/>
-                                                                    </DoubleAnimation.EasingFunction>
-                                                                </DoubleAnimation>
-                                                            </Storyboard>
-                                                        </BeginStoryboard>
-                                                    </EventTrigger>
-                                                </Border.Triggers>
                                             </Border>
                                             <Ellipse x:Name="statusDotBig" Visibility="Collapsed"/>
                                             <TextBlock x:Name="txtServerName" Text="Ucitavam..."
@@ -5009,27 +4984,7 @@ try {
                                                     <Border Background="#0d0d0d" CornerRadius="6"
                                                             Padding="10,7" Margin="0,0,0,4"
                                                             BorderBrush="#2a1a08" BorderThickness="1"
-                                                            ToolTip="{Binding ToolTipText}"
-                                                            RenderTransformOrigin="0,0.5">
-                                                        <Border.RenderTransform>
-                                                            <TranslateTransform X="-20"/>
-                                                        </Border.RenderTransform>
-                                                        <Border.Triggers>
-                                                            <EventTrigger RoutedEvent="Border.Loaded">
-                                                                <BeginStoryboard>
-                                                                    <Storyboard>
-                                                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.Opacity)"
-                                                                                         From="0" To="1" Duration="0:0:0.35"/>
-                                                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)"
-                                                                                         From="-20" To="0" Duration="0:0:0.35">
-                                                                            <DoubleAnimation.EasingFunction>
-                                                                                <CubicEase EasingMode="EaseOut"/>
-                                                                            </DoubleAnimation.EasingFunction>
-                                                                        </DoubleAnimation>
-                                                                    </Storyboard>
-                                                                </BeginStoryboard>
-                                                            </EventTrigger>
-                                                        </Border.Triggers>
+                                                            ToolTip="{Binding ToolTipText}">
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
                                                                 <ColumnDefinition Width="Auto"/>
@@ -5042,17 +4997,6 @@ try {
                                                                 <Border.Effect>
                                                                     <DropShadowEffect Color="#E5484D" BlurRadius="8" ShadowDepth="0" Opacity="0.9"/>
                                                                 </Border.Effect>
-                                                                <Border.Triggers>
-                                                                    <EventTrigger RoutedEvent="Border.Loaded">
-                                                                        <BeginStoryboard>
-                                                                            <Storyboard RepeatBehavior="Forever">
-                                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                                                 From="1" To="0.4" Duration="0:0:1.2"
-                                                                                                 AutoReverse="True"/>
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </EventTrigger>
-                                                                </Border.Triggers>
                                                             </Border>
                                                             <TextBlock Grid.Column="1" Text="{Binding Name}"
                                                                        FontSize="11" Foreground="#ddd"
@@ -5269,7 +5213,7 @@ try {
                                 </LinearGradientBrush>
                             </Border.BorderBrush>
                             <Border.Effect>
-                                <DropShadowEffect x:Name="modListGlow" Color="#F5C518" BlurRadius="0" ShadowDepth="0" Opacity="0"/>
+                                <DropShadowEffect Color="#F5C518" BlurRadius="8" ShadowDepth="0" Opacity="0.2"/>
                             </Border.Effect>
                                 <ListBox x:Name="lstMods" Background="Transparent" Foreground="#ddd"
                                          BorderThickness="0" FontFamily="Segoe UI"
@@ -6638,9 +6582,7 @@ $txtServerModCount   = $window.FindName("txtServerModCount")
 $txtMissingCount     = $window.FindName("txtMissingCount")
 $txtModSizeTotal     = $window.FindName("txtModSizeTotal")
 $txtServerPing       = $window.FindName("txtServerPing")
-$dashStatusBrush     = $window.FindName("dashStatusBrush")
 $dashStatusDot       = $window.FindName("dashStatusDot")
-$dashStatusGlow      = if ($dashStatusDot) { $dashStatusDot.Effect } else { $null }
 $txtModSubtitle      = $window.FindName("txtModSubtitle")
 $txtModsLocal        = $window.FindName("txtModsLocal")
 $txtModsServer       = $window.FindName("txtModsServer")
@@ -6845,27 +6787,7 @@ $window.Add_PreviewKeyDown({
 })
 $btnClose.Add_Click({ $window.Close() })
 
-# ============================================================
-# ANIMIRANI GLOW EFEKT oko mod liste (pulsirajuce svijetlo)
-# ============================================================
-if ($modListGlowBorder) {
-    $script:GlowPhase = 0.0
-    $glowTimer = New-Object System.Windows.Threading.DispatcherTimer
-    $glowTimer.Interval = [TimeSpan]::FromMilliseconds(50)
-    $glowTimer.Add_Tick({
-        $script:GlowPhase += 0.06
-        if ($script:GlowPhase -gt [Math]::PI * 2) { $script:GlowPhase -= [Math]::PI * 2 }
-        $val = ([Math]::Sin($script:GlowPhase) + 1) / 2
-        $blur = 6 + ($val * 14)
-        $opacity = 0.15 + ($val * 0.35)
-        $fx = $modListGlowBorder.Effect
-        if ($fx) {
-            $fx.BlurRadius = $blur
-            $fx.Opacity = $opacity
-        }
-    })
-    $glowTimer.Start()
-}
+# Glow animacija uklonjena — DropShadowEffect modificiranje moze crashirati na nekim .NET 4.x verzijama
 
 # ============================================================
 # NAVIGATION
@@ -8217,8 +8139,12 @@ function Refresh-ServerStatus {
     if ($status.online) {
         $statusDot.Fill = $green
         if ($statusDotBig) { try { $statusDotBig.Fill = $green } catch {} }
-        if ($dashStatusBrush) { $dashStatusBrush.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C") }
-        if ($dashStatusGlow)  { $dashStatusGlow.Color  = [System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C") }
+        if ($dashStatusDot) {
+            try {
+                $dashStatusDot.Background = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C"))
+                $dashStatusDot.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{ Color=[System.Windows.Media.ColorConverter]::ConvertFromString("#30A46C"); BlurRadius=12; ShadowDepth=0; Opacity=0.7 }
+            } catch {}
+        }
         $txtStatus.Text = "ONLINE"
         $txtStatus.Foreground = $green
         $txtServerName.Text = $status.name
@@ -8261,8 +8187,12 @@ function Refresh-ServerStatus {
     } else {
         $statusDot.Fill = $red
         if ($statusDotBig) { try { $statusDotBig.Fill = $red } catch {} }
-        if ($dashStatusBrush) { $dashStatusBrush.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D") }
-        if ($dashStatusGlow)  { $dashStatusGlow.Color  = [System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D") }
+        if ($dashStatusDot) {
+            try {
+                $dashStatusDot.Background = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D"))
+                $dashStatusDot.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{ Color=[System.Windows.Media.ColorConverter]::ConvertFromString("#E5484D"); BlurRadius=12; ShadowDepth=0; Opacity=0.7 }
+            } catch {}
+        }
         $txtStatus.Text = "OFFLINE"
         $txtStatus.Foreground = $red
         $server = Get-ActiveServer
@@ -10360,18 +10290,15 @@ try {
     }
 } catch {}
 
-# WPF DispatcherUnhandledException — sprijecava tiho gasenje aplikacije
+# Dispatcher unhandled exception handler — sprijecava tiho gasenje aplikacije
 try {
-    $app = [System.Windows.Application]::Current
-    if ($app) {
-        $app.Add_DispatcherUnhandledException({
-            param($s, $e)
-            try { Write-Log "WPF UNHANDLED: $($e.Exception.ToString())" } catch {}
-            try { Write-BootLog "WPF UNHANDLED: $($e.Exception.Message)" } catch {}
-            try { "WPF UNHANDLED: $($e.Exception.ToString())" | Add-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
-            $e.Handled = $true
-        })
-    }
+    $window.Dispatcher.Add_UnhandledException({
+        param($s, $e)
+        try { Write-Log "WPF UNHANDLED: $($e.Exception.ToString())" } catch {}
+        try { Write-BootLog "WPF UNHANDLED: $($e.Exception.Message)" } catch {}
+        try { "WPF UNHANDLED: $($e.Exception.ToString())" | Add-Content -LiteralPath (Join-Path $PSScriptRoot "sr_crash.log") -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+        $e.Handled = $true
+    })
 } catch {}
 
 # Prikaži glavni prozor prije zatvaranja splasha (inače OnLastWindowClose može ugasiti app).
