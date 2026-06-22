@@ -1361,7 +1361,7 @@ function Find-ModIconZipEntry {
             $candidates.Add((Split-Path $altExt -Leaf))
         }
     }
-    $candidates.AddRange(@('icon.png', 'store_icon.png', 'icon.dds', 'store_icon.dds', 'icon.jpg'))
+    foreach ($fb in @('icon.png', 'store_icon.png', 'icon.dds', 'store_icon.dds', 'icon.jpg')) { $candidates.Add($fb) }
     $modDir = ''
     if ($ModDescPath -and $ModDescPath -match '[\\/]') {
         $modDir = ($ModDescPath -replace '(?i)modDesc\.xml$', '').TrimEnd('\', '/')
@@ -1419,9 +1419,15 @@ function Convert-DdsBytesToPngFile {
                     $pal = New-Object uint32[] 4
                     $pal[0] = Convert-Rgb565ToArgb $c0 255
                     $pal[1] = Convert-Rgb565ToArgb $c1 255
-                    $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255
-                    $pal[3] = 0
-                    if ($c0 -le $c1) { $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255; $pal[3] = 0 }
+                    if ($c0 -gt $c1) {
+                        # 4-color mode: 2/3 + 1/3 interpolacija (po RGB565 komponentama)
+                        $pal[2] = Convert-Rgb565ToArgb ([uint16](([int]$c0 * 2 + [int]$c1 + 1) / 3)) 255
+                        $pal[3] = Convert-Rgb565ToArgb ([uint16](([int]$c0 + [int]$c1 * 2 + 1) / 3)) 255
+                    } else {
+                        # 3-color + transparent: 1/2 interpolacija
+                        $pal[2] = Convert-Rgb565ToArgb ([uint16](([int]$c0 + [int]$c1) / 2)) 255
+                        $pal[3] = 0
+                    }
                     for ($py = 0; $py -lt 4; $py++) {
                         for ($px = 0; $px -lt 4; $px++) {
                             $x = $bx * 4 + $px; $y = $by * 4 + $py
@@ -1432,7 +1438,7 @@ function Convert-DdsBytesToPngFile {
                             $rgba[$o]     = [byte]($c -band 0xFF)
                             $rgba[$o + 1] = [byte](($c -shr 8) -band 0xFF)
                             $rgba[$o + 2] = [byte](($c -shr 16) -band 0xFF)
-                            $rgba[$o + 3] = if ($idx -eq 3 -and $c0 -gt $c1) { 0 } else { 255 }
+                            $rgba[$o + 3] = if ($idx -eq 3 -and $c0 -le $c1) { 0 } else { 255 }
                         }
                     }
                 }
@@ -1678,21 +1684,28 @@ function Start-ModThumbnailLoads {
         if (-not $item.LocalZipPath -or -not (Test-Path $item.LocalZipPath)) { continue }
         $cached = Get-ModThumbnailCachePath -ZipPath $item.LocalZipPath
         if ($cached -and (Test-Path $cached)) {
-            try {
-                $item.ThumbSource = New-ModBitmapImage $cached
-                $item.HasThumb = ($null -ne $item.ThumbSource)
-            } catch {}
-            continue
+            $cfi = Get-Item $cached -ErrorAction SilentlyContinue
+            if ($cfi -and $cfi.Length -gt 100) {
+                try {
+                    $item.ThumbSource = New-ModBitmapImage $cached
+                    $item.HasThumb = ($null -ne $item.ThumbSource)
+                } catch {}
+                if ($item.HasThumb) { continue }
+            }
+            # Cache fajl je prazan ili neispravan — obrisi i ponovo generiraj
+            Remove-Item $cached -Force -ErrorAction SilentlyContinue
         }
         $item.ThumbLoading = $true
         $script:ThumbQueue.Enqueue($item)
     }
     if ($script:ThumbQueue.Count -eq 0) { return }
-    # DispatcherTimer — obradjuje po 2 thumbnailova svakih 80ms (ne blokira UI)
+    $script:ThumbRefreshCounter = 0
+    # DispatcherTimer — obradjuje po 3 thumbnailova svakih 100ms (ne blokira UI)
     $script:ThumbTimer = New-Object System.Windows.Threading.DispatcherTimer
-    $script:ThumbTimer.Interval = [TimeSpan]::FromMilliseconds(80)
+    $script:ThumbTimer.Interval = [TimeSpan]::FromMilliseconds(100)
     $script:ThumbTimer.Add_Tick({
-        $batch = 2
+        $batch = 3
+        $anyUpdated = $false
         while ($batch -gt 0 -and $script:ThumbQueue.Count -gt 0) {
             $batch--
             $it = $script:ThumbQueue.Dequeue()
@@ -1703,12 +1716,20 @@ function Start-ModThumbnailLoads {
                     if ($img) {
                         $it.ThumbSource = $img
                         $it.HasThumb = $true
+                        $anyUpdated = $true
                     }
                 }
             } catch {}
             $it.ThumbLoading = $false
         }
-        if ($script:ThumbQueue.Count -eq 0) { $script:ThumbTimer.Stop() }
+        # PSCustomObject nema INotifyPropertyChanged — WPF ne zna da se HasThumb promijenio.
+        # Refresh svaki 10. tick (~1s) ili kad zavrsi, da UI ne treperi.
+        $script:ThumbRefreshCounter++
+        $finished = ($script:ThumbQueue.Count -eq 0)
+        if ($anyUpdated -and ($finished -or ($script:ThumbRefreshCounter % 10 -eq 0))) {
+            try { $lstMods.Items.Refresh() } catch {}
+        }
+        if ($finished) { $script:ThumbTimer.Stop() }
     })
     $script:ThumbTimer.Start()
 }
@@ -4633,34 +4654,70 @@ $script:PreloadedLocalModCount = $null
                                 </Grid>
                             </Border>
 
-                            <!-- Compact mod stats strip -->
-                            <Border Style="{StaticResource SrCard}" Padding="16,12" Margin="0,0,0,16">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" HorizontalAlignment="Center">
-                                        <TextBlock Text="MOJI MODOVI" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                                        <TextBlock x:Name="txtMyModCount" Text="-" FontSize="22"
+                            <!-- Mod stat kartice -->
+                            <Grid Margin="0,0,0,16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <!-- Moji modovi -->
+                                <Border Grid.Column="0" CornerRadius="10" Padding="18,14" BorderThickness="1"
+                                        BorderBrush="#2a2208">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#1a1408" Offset="0"/>
+                                            <GradientStop Color="#111" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <StackPanel>
+                                        <TextBlock Text="LOKALNO" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                        <TextBlock x:Name="txtMyModCount" Text="-" FontSize="28"
                                                    FontWeight="Bold" Foreground="{StaticResource Gold}"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                                   FontFamily="Segoe UI"/>
+                                        <TextBlock Text="modova instalirano" FontSize="10" Foreground="#666"
+                                                   FontFamily="Segoe UI" Margin="0,2,0,0"/>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="1" HorizontalAlignment="Center">
-                                        <TextBlock Text="SERVER" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                                        <TextBlock x:Name="txtServerModCount" Text="-" FontSize="22"
-                                                   FontWeight="Bold" Foreground="{StaticResource Gold}"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                </Border>
+                                <!-- Server modovi -->
+                                <Border Grid.Column="2" CornerRadius="10" Padding="18,14" BorderThickness="1"
+                                        BorderBrush="#0d2040">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#0d1a2e" Offset="0"/>
+                                            <GradientStop Color="#111" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <StackPanel>
+                                        <TextBlock Text="SERVER" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                        <TextBlock x:Name="txtServerModCount" Text="-" FontSize="28"
+                                                   FontWeight="Bold" Foreground="#5B9BD5"
+                                                   FontFamily="Segoe UI"/>
+                                        <TextBlock Text="modova na serveru" FontSize="10" Foreground="#666"
+                                                   FontFamily="Segoe UI" Margin="0,2,0,0"/>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="2" HorizontalAlignment="Center">
-                                        <TextBlock Text="FALI TI" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                                        <TextBlock x:Name="txtMissingCount" Text="-" FontSize="22"
+                                </Border>
+                                <!-- Fali -->
+                                <Border Grid.Column="4" CornerRadius="10" Padding="18,14" BorderThickness="1"
+                                        BorderBrush="#2a1515">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#1e0d0d" Offset="0"/>
+                                            <GradientStop Color="#111" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <StackPanel>
+                                        <TextBlock Text="FALI / ZASTARJELO" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                        <TextBlock x:Name="txtMissingCount" Text="-" FontSize="28"
                                                    FontWeight="Bold" Foreground="{StaticResource DangerRed}"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                                   FontFamily="Segoe UI"/>
+                                        <TextBlock Text="modova nedostaje" FontSize="10" Foreground="#666"
+                                                   FontFamily="Segoe UI" Margin="0,2,0,0"/>
                                     </StackPanel>
-                                </Grid>
-                            </Border>
+                                </Border>
+                            </Grid>
                             <!-- Skriveni elementi za kompatibilnost s kodom -->
                             <TextBlock x:Name="txtModSizeTotal" Visibility="Collapsed"/>
 
@@ -7659,40 +7716,34 @@ function Download-MissingMods {
         try {
             Write-Log "  Skidam: $($modEntry.Name)..."
 
-            # Async download s progress eventima
+            # Async download — koristimo dijeljeni hashtable za progress (Register-ObjectEvent
+            # radi u zasebnom runspaceu pa $script: varijable nisu vidljive iz glavnog threada)
             $wc = New-Object System.Net.WebClient
-            $script:_dlDone = $false
-            $script:_dlError = $null
-            $script:_dlPct = 0
-            $script:_dlReceived = 0
-            $script:_dlTotal = 0
-            $script:_dlStartTime = [DateTime]::Now
+            $dlState = [hashtable]::Synchronized(@{
+                Done = $false; Error = $null; Pct = 0; Received = [long]0; Total = [long]0
+            })
+            $startTime = [DateTime]::Now
 
-            # Progress changed event
-            $progressHandler = Register-ObjectEvent -InputObject $wc -EventName DownloadProgressChanged -Action {
-                $script:_dlPct      = $EventArgs.ProgressPercentage
-                $script:_dlReceived = $EventArgs.BytesReceived
-                $script:_dlTotal    = $EventArgs.TotalBytesToReceive
+            $progressHandler = Register-ObjectEvent -InputObject $wc -EventName DownloadProgressChanged -MessageData $dlState -Action {
+                $Event.MessageData.Pct      = $EventArgs.ProgressPercentage
+                $Event.MessageData.Received = $EventArgs.BytesReceived
+                $Event.MessageData.Total    = $EventArgs.TotalBytesToReceive
             }
-
-            # Completed event
-            $completedHandler = Register-ObjectEvent -InputObject $wc -EventName DownloadFileCompleted -Action {
-                if ($EventArgs.Error) { $script:_dlError = $EventArgs.Error.Message }
-                $script:_dlDone = $true
+            $completedHandler = Register-ObjectEvent -InputObject $wc -EventName DownloadFileCompleted -MessageData $dlState -Action {
+                if ($EventArgs.Error) { $Event.MessageData.Error = $EventArgs.Error.Message }
+                $Event.MessageData.Done = $true
             }
 
             $wc.DownloadFileAsync([Uri]$modEntry.Url, $dest)
 
             # Pumpa UI dok ceka download
-            while (-not $script:_dlDone) {
-                # Azuriraj UI
+            while (-not $dlState.Done) {
                 if ($dlPanel) {
-                    $pct = $script:_dlPct
-                    $recv = $script:_dlReceived
-                    $total = $script:_dlTotal
-                    $elapsed = ([DateTime]::Now - $script:_dlStartTime).TotalSeconds
+                    $pct   = $dlState.Pct
+                    $recv  = $dlState.Received
+                    $total = $dlState.Total
+                    $elapsed = ([DateTime]::Now - $startTime).TotalSeconds
 
-                    # Brzina i ETA
                     $speed = if ($elapsed -gt 0.5) { $recv / $elapsed } else { 0 }
                     $speedStr = if ($speed -gt 1MB) { "{0:N1} MB/s" -f ($speed / 1MB) }
                                 elseif ($speed -gt 1KB) { "{0:N0} KB/s" -f ($speed / 1KB) }
@@ -7734,8 +7785,8 @@ function Download-MissingMods {
             Remove-Job -Id $completedHandler.Id -Force -ErrorAction SilentlyContinue
             $wc.Dispose()
 
-            if ($script:_dlError) {
-                Write-Log "  GRESKA: $($modEntry.Name) - $($script:_dlError)"
+            if ($dlState.Error) {
+                Write-Log "  GRESKA: $($modEntry.Name) - $($dlState.Error)"
                 continue
             }
 
