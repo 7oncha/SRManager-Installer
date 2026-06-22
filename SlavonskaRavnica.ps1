@@ -1321,7 +1321,8 @@ function Get-ModIconFilenameFromModDescXml {
         '<iconFilename>\s*([^<]+)\s*</iconFilename>',
         'iconFilename\s*=\s*"([^"]+)"',
         '<storeIcon>\s*([^<]+)\s*</storeIcon>',
-        'storeIcon\s*=\s*"([^"]+)"'
+        'storeIcon\s*=\s*"([^"]+)"',
+        '<image>\s*([^<]+)\s*</image>'
     )) {
         if ($XmlText -match $pat) { return $Matches[1].Trim() }
     }
@@ -1351,8 +1352,16 @@ function Find-ModIconZipEntry {
     if ($IconFilename) {
         $candidates.Add($IconFilename)
         $candidates.Add((Split-Path $IconFilename -Leaf))
+        # Probaj i alternativnu ekstenziju (.png -> .dds i obrnuto)
+        $altExt = if ($IconFilename -match '\.png$') { $IconFilename -replace '\.png$', '.dds' }
+                  elseif ($IconFilename -match '\.dds$') { $IconFilename -replace '\.dds$', '.png' }
+                  else { $null }
+        if ($altExt) {
+            $candidates.Add($altExt)
+            $candidates.Add((Split-Path $altExt -Leaf))
+        }
     }
-    $candidates.AddRange(@('icon.png', 'store_icon.png', 'icon.dds', 'store_icon.dds', 'icon.jpg'))
+    foreach ($fb in @('icon.png', 'store_icon.png', 'icon.dds', 'store_icon.dds', 'icon.jpg')) { $candidates.Add($fb) }
     $modDir = ''
     if ($ModDescPath -and $ModDescPath -match '[\\/]') {
         $modDir = ($ModDescPath -replace '(?i)modDesc\.xml$', '').TrimEnd('\', '/')
@@ -1369,7 +1378,7 @@ function Find-ModIconZipEntry {
     }
     foreach ($e in $Zip.Entries) {
         $fn = ($e.FullName -replace '\\', '/')
-        if ($fn -imatch '(^|/)(store_)?icon\.(png|jpg|jpeg|dds)$') { return $e }
+        if ($fn -imatch '(^|/)([^/]*icon[^/]*|store[^/]*)\.(png|jpg|jpeg|dds)$') { return $e }
     }
     return $null
 }
@@ -1410,9 +1419,15 @@ function Convert-DdsBytesToPngFile {
                     $pal = New-Object uint32[] 4
                     $pal[0] = Convert-Rgb565ToArgb $c0 255
                     $pal[1] = Convert-Rgb565ToArgb $c1 255
-                    $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255
-                    $pal[3] = 0
-                    if ($c0 -le $c1) { $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255; $pal[3] = 0 }
+                    if ($c0 -gt $c1) {
+                        # 4-color mode: 2/3 + 1/3 interpolacija (po RGB565 komponentama)
+                        $pal[2] = Convert-Rgb565ToArgb ([uint16](([int]$c0 * 2 + [int]$c1 + 1) / 3)) 255
+                        $pal[3] = Convert-Rgb565ToArgb ([uint16](([int]$c0 + [int]$c1 * 2 + 1) / 3)) 255
+                    } else {
+                        # 3-color + transparent: 1/2 interpolacija
+                        $pal[2] = Convert-Rgb565ToArgb ([uint16](([int]$c0 + [int]$c1) / 2)) 255
+                        $pal[3] = 0
+                    }
                     for ($py = 0; $py -lt 4; $py++) {
                         for ($px = 0; $px -lt 4; $px++) {
                             $x = $bx * 4 + $px; $y = $by * 4 + $py
@@ -1423,7 +1438,92 @@ function Convert-DdsBytesToPngFile {
                             $rgba[$o]     = [byte]($c -band 0xFF)
                             $rgba[$o + 1] = [byte](($c -shr 8) -band 0xFF)
                             $rgba[$o + 2] = [byte](($c -shr 16) -band 0xFF)
-                            $rgba[$o + 3] = if ($idx -eq 3 -and $c0 -gt $c1) { 0 } else { 255 }
+                            $rgba[$o + 3] = if ($idx -eq 3 -and $c0 -le $c1) { 0 } else { 255 }
+                        }
+                    }
+                }
+            }
+        } elseif ($pf -eq 0x35545844) {
+            # DXT5 — 16 bajtova po bloku (8 alpha + 8 boja)
+            $blocksX = [Math]::Max(1, [int][Math]::Ceiling($w / 4.0))
+            $blocksY = [Math]::Max(1, [int][Math]::Ceiling($h / 4.0))
+            $pos = $dataOff
+            for ($by = 0; $by -lt $blocksY; $by++) {
+                for ($bx = 0; $bx -lt $blocksX; $bx++) {
+                    if ($pos + 16 -gt $Bytes.Length) { return $false }
+                    # Alpha blok (8 bajtova)
+                    $a0 = [int]$Bytes[$pos]; $a1 = [int]$Bytes[$pos + 1]; $pos += 2
+                    $aPal = New-Object int[] 8
+                    $aPal[0] = $a0; $aPal[1] = $a1
+                    if ($a0 -gt $a1) {
+                        for ($ai = 0; $ai -lt 6; $ai++) { $aPal[$ai + 2] = [int]((($a0 * (6 - $ai)) + ($a1 * ($ai + 1))) / 7) }
+                    } else {
+                        for ($ai = 0; $ai -lt 4; $ai++) { $aPal[$ai + 2] = [int]((($a0 * (4 - $ai)) + ($a1 * ($ai + 1))) / 5) }
+                        $aPal[6] = 0; $aPal[7] = 255
+                    }
+                    # 6 bajtova alpha indeksi (48 bita = 16 piksela x 3 bita)
+                    [uint64]$aBits = 0
+                    for ($ab = 0; $ab -lt 6; $ab++) { $aBits = $aBits -bor ([uint64]$Bytes[$pos + $ab] -shl ($ab * 8)) }
+                    $pos += 6
+                    # Boja blok (8 bajtova) — isto kao DXT1
+                    $c0 = [BitConverter]::ToUInt16($Bytes, $pos); $pos += 2
+                    $c1 = [BitConverter]::ToUInt16($Bytes, $pos); $pos += 2
+                    $bits = [BitConverter]::ToUInt32($Bytes, $pos); $pos += 4
+                    $pal = New-Object uint32[] 4
+                    $pal[0] = Convert-Rgb565ToArgb $c0 255
+                    $pal[1] = Convert-Rgb565ToArgb $c1 255
+                    $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255
+                    $pal[3] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255
+                    for ($py = 0; $py -lt 4; $py++) {
+                        for ($px = 0; $px -lt 4; $px++) {
+                            $x = $bx * 4 + $px; $y = $by * 4 + $py
+                            if ($x -ge $w -or $y -ge $h) { continue }
+                            $idx = [int](($bits -shr (2 * ($py * 4 + $px))) -band 3)
+                            $c = $pal[$idx]
+                            $aIdx = [int](($aBits -shr (3 * ($py * 4 + $px))) -band 7)
+                            $alpha = [byte]$aPal[$aIdx]
+                            $o = ($y * $w + $x) * 4
+                            $rgba[$o]     = [byte]($c -band 0xFF)
+                            $rgba[$o + 1] = [byte](($c -shr 8) -band 0xFF)
+                            $rgba[$o + 2] = [byte](($c -shr 16) -band 0xFF)
+                            $rgba[$o + 3] = $alpha
+                        }
+                    }
+                }
+            }
+        } elseif ($pf -eq 0x33545844) {
+            # DXT3 — 16 bajtova po bloku (8 explicit alpha + 8 boja)
+            $blocksX = [Math]::Max(1, [int][Math]::Ceiling($w / 4.0))
+            $blocksY = [Math]::Max(1, [int][Math]::Ceiling($h / 4.0))
+            $pos = $dataOff
+            for ($by = 0; $by -lt $blocksY; $by++) {
+                for ($bx = 0; $bx -lt $blocksX; $bx++) {
+                    if ($pos + 16 -gt $Bytes.Length) { return $false }
+                    # 8 bajtova explicit alpha (4 bita po pikselu)
+                    $alphaBytes = New-Object byte[] 8
+                    [Array]::Copy($Bytes, $pos, $alphaBytes, 0, 8); $pos += 8
+                    $c0 = [BitConverter]::ToUInt16($Bytes, $pos); $pos += 2
+                    $c1 = [BitConverter]::ToUInt16($Bytes, $pos); $pos += 2
+                    $bits = [BitConverter]::ToUInt32($Bytes, $pos); $pos += 4
+                    $pal = New-Object uint32[] 4
+                    $pal[0] = Convert-Rgb565ToArgb $c0 255
+                    $pal[1] = Convert-Rgb565ToArgb $c1 255
+                    $pal[2] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255
+                    $pal[3] = Convert-Rgb565ToArgb ([uint16](($c0 + $c1) / 2)) 255
+                    for ($py = 0; $py -lt 4; $py++) {
+                        for ($px = 0; $px -lt 4; $px++) {
+                            $x = $bx * 4 + $px; $y = $by * 4 + $py
+                            if ($x -ge $w -or $y -ge $h) { continue }
+                            $idx = [int](($bits -shr (2 * ($py * 4 + $px))) -band 3)
+                            $c = $pal[$idx]
+                            $pixIdx = $py * 4 + $px
+                            $aByte = $alphaBytes[[int]($pixIdx / 2)]
+                            $alpha = if ($pixIdx % 2 -eq 0) { ($aByte -band 0x0F) * 17 } else { (($aByte -shr 4) -band 0x0F) * 17 }
+                            $o = ($y * $w + $x) * 4
+                            $rgba[$o]     = [byte]($c -band 0xFF)
+                            $rgba[$o + 1] = [byte](($c -shr 8) -band 0xFF)
+                            $rgba[$o + 2] = [byte](($c -shr 16) -band 0xFF)
+                            $rgba[$o + 3] = [byte]$alpha
                         }
                     }
                 }
@@ -1531,12 +1631,18 @@ function Get-ModThumbnailFromZip {
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue | Out-Null
         $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
         try {
+            $iconEntry = $null
             $desc = Get-ModDescEntryFromZip -Zip $zip
-            if (-not $desc) { return $null }
-            $sr = New-Object System.IO.StreamReader($desc.Open())
-            try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
-            $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
-            $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
+            if ($desc) {
+                $sr = New-Object System.IO.StreamReader($desc.Open())
+                try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
+                $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
+                $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
+            }
+            # Ako nema modDesc ili ikona nije nadjena, pokusaj direktno naci ikonu u ZIP-u
+            if (-not $iconEntry) {
+                $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $null -ModDescPath ''
+            }
             if (-not $iconEntry) { return $null }
             if (Export-ModIconEntryToPng -Entry $iconEntry -OutPath $cache) { return $cache }
         } finally {
@@ -1578,21 +1684,28 @@ function Start-ModThumbnailLoads {
         if (-not $item.LocalZipPath -or -not (Test-Path $item.LocalZipPath)) { continue }
         $cached = Get-ModThumbnailCachePath -ZipPath $item.LocalZipPath
         if ($cached -and (Test-Path $cached)) {
-            try {
-                $item.ThumbSource = New-ModBitmapImage $cached
-                $item.HasThumb = ($null -ne $item.ThumbSource)
-            } catch {}
-            continue
+            $cfi = Get-Item $cached -ErrorAction SilentlyContinue
+            if ($cfi -and $cfi.Length -gt 100) {
+                try {
+                    $item.ThumbSource = New-ModBitmapImage $cached
+                    $item.HasThumb = ($null -ne $item.ThumbSource)
+                } catch {}
+                if ($item.HasThumb) { continue }
+            }
+            # Cache fajl je prazan ili neispravan — obrisi i ponovo generiraj
+            Remove-Item $cached -Force -ErrorAction SilentlyContinue
         }
         $item.ThumbLoading = $true
         $script:ThumbQueue.Enqueue($item)
     }
     if ($script:ThumbQueue.Count -eq 0) { return }
-    # DispatcherTimer — obradjuje po 2 thumbnailova svakih 80ms (ne blokira UI)
+    $script:ThumbRefreshCounter = 0
+    # DispatcherTimer — obradjuje po 3 thumbnailova svakih 100ms (ne blokira UI)
     $script:ThumbTimer = New-Object System.Windows.Threading.DispatcherTimer
-    $script:ThumbTimer.Interval = [TimeSpan]::FromMilliseconds(80)
+    $script:ThumbTimer.Interval = [TimeSpan]::FromMilliseconds(100)
     $script:ThumbTimer.Add_Tick({
-        $batch = 2
+        $batch = 3
+        $anyUpdated = $false
         while ($batch -gt 0 -and $script:ThumbQueue.Count -gt 0) {
             $batch--
             $it = $script:ThumbQueue.Dequeue()
@@ -1603,12 +1716,20 @@ function Start-ModThumbnailLoads {
                     if ($img) {
                         $it.ThumbSource = $img
                         $it.HasThumb = $true
+                        $anyUpdated = $true
                     }
                 }
             } catch {}
             $it.ThumbLoading = $false
         }
-        if ($script:ThumbQueue.Count -eq 0) { $script:ThumbTimer.Stop() }
+        # PSCustomObject nema INotifyPropertyChanged — WPF ne zna da se HasThumb promijenio.
+        # Refresh svaki 10. tick (~1s) ili kad zavrsi, da UI ne treperi.
+        $script:ThumbRefreshCounter++
+        $finished = ($script:ThumbQueue.Count -eq 0)
+        if ($anyUpdated -and ($finished -or ($script:ThumbRefreshCounter % 10 -eq 0))) {
+            try { $lstMods.Items.Refresh() } catch {}
+        }
+        if ($finished) { $script:ThumbTimer.Stop() }
     })
     $script:ThumbTimer.Start()
 }
@@ -4533,34 +4654,70 @@ $script:PreloadedLocalModCount = $null
                                 </Grid>
                             </Border>
 
-                            <!-- Compact mod stats strip -->
-                            <Border Style="{StaticResource SrCard}" Padding="16,12" Margin="0,0,0,16">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" HorizontalAlignment="Center">
-                                        <TextBlock Text="MOJI MODOVI" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                                        <TextBlock x:Name="txtMyModCount" Text="-" FontSize="22"
+                            <!-- Mod stat kartice -->
+                            <Grid Margin="0,0,0,16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <!-- Moji modovi -->
+                                <Border Grid.Column="0" CornerRadius="10" Padding="18,14" BorderThickness="1"
+                                        BorderBrush="#2a2208">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#1a1408" Offset="0"/>
+                                            <GradientStop Color="#111" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <StackPanel>
+                                        <TextBlock Text="LOKALNO" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                        <TextBlock x:Name="txtMyModCount" Text="-" FontSize="28"
                                                    FontWeight="Bold" Foreground="{StaticResource Gold}"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                                   FontFamily="Segoe UI"/>
+                                        <TextBlock Text="modova instalirano" FontSize="10" Foreground="#666"
+                                                   FontFamily="Segoe UI" Margin="0,2,0,0"/>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="1" HorizontalAlignment="Center">
-                                        <TextBlock Text="SERVER" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                                        <TextBlock x:Name="txtServerModCount" Text="-" FontSize="22"
-                                                   FontWeight="Bold" Foreground="{StaticResource Gold}"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                </Border>
+                                <!-- Server modovi -->
+                                <Border Grid.Column="2" CornerRadius="10" Padding="18,14" BorderThickness="1"
+                                        BorderBrush="#0d2040">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#0d1a2e" Offset="0"/>
+                                            <GradientStop Color="#111" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <StackPanel>
+                                        <TextBlock Text="SERVER" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                        <TextBlock x:Name="txtServerModCount" Text="-" FontSize="28"
+                                                   FontWeight="Bold" Foreground="#5B9BD5"
+                                                   FontFamily="Segoe UI"/>
+                                        <TextBlock Text="modova na serveru" FontSize="10" Foreground="#666"
+                                                   FontFamily="Segoe UI" Margin="0,2,0,0"/>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="2" HorizontalAlignment="Center">
-                                        <TextBlock Text="FALI TI" Style="{StaticResource SectionLabel}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                                        <TextBlock x:Name="txtMissingCount" Text="-" FontSize="22"
+                                </Border>
+                                <!-- Fali -->
+                                <Border Grid.Column="4" CornerRadius="10" Padding="18,14" BorderThickness="1"
+                                        BorderBrush="#2a1515">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#1e0d0d" Offset="0"/>
+                                            <GradientStop Color="#111" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <StackPanel>
+                                        <TextBlock Text="FALI / ZASTARJELO" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                        <TextBlock x:Name="txtMissingCount" Text="-" FontSize="28"
                                                    FontWeight="Bold" Foreground="{StaticResource DangerRed}"
-                                                   FontFamily="Segoe UI" HorizontalAlignment="Center"/>
+                                                   FontFamily="Segoe UI"/>
+                                        <TextBlock Text="modova nedostaje" FontSize="10" Foreground="#666"
+                                                   FontFamily="Segoe UI" Margin="0,2,0,0"/>
                                     </StackPanel>
-                                </Grid>
-                            </Border>
+                                </Border>
+                            </Grid>
                             <!-- Skriveni elementi za kompatibilnost s kodom -->
                             <TextBlock x:Name="txtModSizeTotal" Visibility="Collapsed"/>
 
@@ -4793,7 +4950,7 @@ $script:PreloadedLocalModCount = $null
                                     </ListBox.ItemsPanel>
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
-                                            <Border Width="176" MinHeight="228" CornerRadius="8"
+                                            <Border Width="168" Height="210" CornerRadius="8"
                                                     Background="{StaticResource CardBg}" BorderBrush="#2a2a2a" BorderThickness="1"
                                                     Padding="0" Cursor="Hand"
                                                     ToolTip="{Binding ToolTipText}">
@@ -4811,8 +4968,13 @@ $script:PreloadedLocalModCount = $null
                                                         </Style.Triggers>
                                                     </Style>
                                                 </Border.Style>
-                                                <StackPanel>
-                                                    <Border Height="100" CornerRadius="8,8,0,0" Background="#0d0d0d" ClipToBounds="True">
+                                                <Grid>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="*"/>
+                                                        <RowDefinition Height="Auto"/>
+                                                    </Grid.RowDefinitions>
+                                                    <!-- Slika moda — zauzima vecinu kartice -->
+                                                    <Border Grid.Row="0" CornerRadius="8,8,0,0" Background="#0d0d0d" ClipToBounds="True">
                                                         <Grid>
                                                             <Image Stretch="UniformToFill"
                                                                    HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -4828,7 +4990,8 @@ $script:PreloadedLocalModCount = $null
                                                                     </Style>
                                                                 </Image.Style>
                                                             </Image>
-                                                            <Ellipse Width="52" Height="52" HorizontalAlignment="Center"
+                                                            <!-- Placeholder kad nema slike -->
+                                                            <Ellipse Width="48" Height="48" HorizontalAlignment="Center"
                                                                      VerticalAlignment="Center">
                                                                 <Ellipse.Style>
                                                                     <Style TargetType="Ellipse">
@@ -4848,7 +5011,7 @@ $script:PreloadedLocalModCount = $null
                                                                     </Style>
                                                                 </Ellipse.Style>
                                                             </Ellipse>
-                                                            <TextBlock Text="{Binding Initial}" FontSize="26" FontWeight="Bold"
+                                                            <TextBlock Text="{Binding Initial}" FontSize="22" FontWeight="Bold"
                                                                        Foreground="{StaticResource Gold}" HorizontalAlignment="Center"
                                                                        VerticalAlignment="Center" FontFamily="Segoe UI">
                                                                 <TextBlock.Style>
@@ -4861,62 +5024,21 @@ $script:PreloadedLocalModCount = $null
                                                                     </Style>
                                                                 </TextBlock.Style>
                                                             </TextBlock>
-                                                            <TextBlock Text="&#x26A0;" FontSize="16" FontWeight="Bold"
-                                                                       HorizontalAlignment="Right" VerticalAlignment="Top"
-                                                                       Margin="0,8,10,0" Foreground="#E5484D">
-                                                                <TextBlock.Style>
-                                                                    <Style TargetType="TextBlock">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding Status}" Value="FALI">
-                                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                                            </DataTrigger>
-                                                                            <DataTrigger Binding="{Binding Status}" Value="ZASTARIO">
-                                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                                                <Setter Property="Foreground" Value="#F5C518"/>
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </TextBlock.Style>
-                                                            </TextBlock>
-                                                            <Button x:Name="btnModFavorite" Content="{Binding FavoriteStar}"
-                                                                    Width="30" Height="30" Padding="0"
-                                                                    HorizontalAlignment="Left" VerticalAlignment="Top"
-                                                                    Margin="8,8,0,0" Background="#99000000"
-                                                                    BorderThickness="0" Cursor="Hand"
-                                                                    FontSize="17" Foreground="#F5C518"
-                                                                    ToolTip="Dodaj ili ukloni iz favorita"/>
-                                                        </Grid>
-                                                    </Border>
-                                                    <StackPanel Margin="12,10,12,12">
-                                                        <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold"
-                                                                   Foreground="{StaticResource BodyText}" TextTrimming="CharacterEllipsis"
-                                                                   MaxWidth="152" FontFamily="Segoe UI"/>
-                                                        <TextBlock Text="{Binding Version}" FontSize="10" Foreground="{StaticResource MutedText}"
-                                                                   Margin="0,4,0,0" FontFamily="Segoe UI"/>
-                                                        <Grid Margin="0,8,0,0">
-                                                            <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="*"/>
-                                                                <ColumnDefinition Width="Auto"/>
-                                                            </Grid.ColumnDefinitions>
-                                                            <Border Grid.Column="0" CornerRadius="4" Padding="6,3"
-                                                                    HorizontalAlignment="Left" Background="#1e1e1e">
-                                                                <TextBlock Text="{Binding Category}" FontSize="9"
-                                                                           Foreground="#aaa" FontFamily="Segoe UI"/>
-                                                            </Border>
-                                                            <Border Grid.Column="1" CornerRadius="4" Padding="8,3" Margin="6,0,0,0">
+                                                            <!-- Status badge — donji desni kut slike -->
+                                                            <Border CornerRadius="4" Padding="6,2" Margin="0,0,6,6"
+                                                                    HorizontalAlignment="Right" VerticalAlignment="Bottom">
                                                                 <Border.Style>
                                                                     <Style TargetType="Border">
-                                                                        <Setter Property="Background" Value="#13301f"/>
+                                                                        <Setter Property="Background" Value="#CC13301f"/>
                                                                         <Style.Triggers>
                                                                             <DataTrigger Binding="{Binding Status}" Value="FALI">
-                                                                                <Setter Property="Background" Value="#2a1515"/>
+                                                                                <Setter Property="Background" Value="#CC2a1515"/>
                                                                             </DataTrigger>
                                                                             <DataTrigger Binding="{Binding Status}" Value="ZASTARIO">
-                                                                                <Setter Property="Background" Value="#2a1f08"/>
+                                                                                <Setter Property="Background" Value="#CC2a1f08"/>
                                                                             </DataTrigger>
                                                                             <DataTrigger Binding="{Binding Status}" Value="EXTRA">
-                                                                                <Setter Property="Background" Value="#1a1a2a"/>
+                                                                                <Setter Property="Background" Value="#CC1a1a2a"/>
                                                                             </DataTrigger>
                                                                         </Style.Triggers>
                                                                     </Style>
@@ -4941,11 +5063,23 @@ $script:PreloadedLocalModCount = $null
                                                                     </TextBlock.Style>
                                                                 </TextBlock>
                                                             </Border>
+                                                            <!-- Favorit zvjezdica -->
+                                                            <Button x:Name="btnModFavorite" Content="{Binding FavoriteStar}"
+                                                                    Width="26" Height="26" Padding="0"
+                                                                    HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                                    Margin="6,6,0,0" Background="#99000000"
+                                                                    BorderThickness="0" Cursor="Hand"
+                                                                    FontSize="14" Foreground="#F5C518"
+                                                                    ToolTip="Dodaj ili ukloni iz favorita"/>
                                                         </Grid>
-                                                        <TextBlock Text="{Binding Size}" FontSize="9" Foreground="#666"
-                                                                   Margin="0,8,0,0" FontFamily="Segoe UI"/>
-                                                    </StackPanel>
-                                                </StackPanel>
+                                                    </Border>
+                                                    <!-- Samo ime moda ispod slike -->
+                                                    <Border Grid.Row="1" Padding="8,6,8,6" Background="Transparent">
+                                                        <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
+                                                                   Foreground="{StaticResource BodyText}" TextTrimming="CharacterEllipsis"
+                                                                   MaxWidth="152" FontFamily="Segoe UI"/>
+                                                    </Border>
+                                                </Grid>
                                             </Border>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
@@ -7582,40 +7716,34 @@ function Download-MissingMods {
         try {
             Write-Log "  Skidam: $($modEntry.Name)..."
 
-            # Async download s progress eventima
+            # Async download — koristimo dijeljeni hashtable za progress (Register-ObjectEvent
+            # radi u zasebnom runspaceu pa $script: varijable nisu vidljive iz glavnog threada)
             $wc = New-Object System.Net.WebClient
-            $script:_dlDone = $false
-            $script:_dlError = $null
-            $script:_dlPct = 0
-            $script:_dlReceived = 0
-            $script:_dlTotal = 0
-            $script:_dlStartTime = [DateTime]::Now
+            $dlState = [hashtable]::Synchronized(@{
+                Done = $false; Error = $null; Pct = 0; Received = [long]0; Total = [long]0
+            })
+            $startTime = [DateTime]::Now
 
-            # Progress changed event
-            $progressHandler = Register-ObjectEvent -InputObject $wc -EventName DownloadProgressChanged -Action {
-                $script:_dlPct      = $EventArgs.ProgressPercentage
-                $script:_dlReceived = $EventArgs.BytesReceived
-                $script:_dlTotal    = $EventArgs.TotalBytesToReceive
+            $progressHandler = Register-ObjectEvent -InputObject $wc -EventName DownloadProgressChanged -MessageData $dlState -Action {
+                $Event.MessageData.Pct      = $EventArgs.ProgressPercentage
+                $Event.MessageData.Received = $EventArgs.BytesReceived
+                $Event.MessageData.Total    = $EventArgs.TotalBytesToReceive
             }
-
-            # Completed event
-            $completedHandler = Register-ObjectEvent -InputObject $wc -EventName DownloadFileCompleted -Action {
-                if ($EventArgs.Error) { $script:_dlError = $EventArgs.Error.Message }
-                $script:_dlDone = $true
+            $completedHandler = Register-ObjectEvent -InputObject $wc -EventName DownloadFileCompleted -MessageData $dlState -Action {
+                if ($EventArgs.Error) { $Event.MessageData.Error = $EventArgs.Error.Message }
+                $Event.MessageData.Done = $true
             }
 
             $wc.DownloadFileAsync([Uri]$modEntry.Url, $dest)
 
             # Pumpa UI dok ceka download
-            while (-not $script:_dlDone) {
-                # Azuriraj UI
+            while (-not $dlState.Done) {
                 if ($dlPanel) {
-                    $pct = $script:_dlPct
-                    $recv = $script:_dlReceived
-                    $total = $script:_dlTotal
-                    $elapsed = ([DateTime]::Now - $script:_dlStartTime).TotalSeconds
+                    $pct   = $dlState.Pct
+                    $recv  = $dlState.Received
+                    $total = $dlState.Total
+                    $elapsed = ([DateTime]::Now - $startTime).TotalSeconds
 
-                    # Brzina i ETA
                     $speed = if ($elapsed -gt 0.5) { $recv / $elapsed } else { 0 }
                     $speedStr = if ($speed -gt 1MB) { "{0:N1} MB/s" -f ($speed / 1MB) }
                                 elseif ($speed -gt 1KB) { "{0:N0} KB/s" -f ($speed / 1KB) }
@@ -7657,8 +7785,8 @@ function Download-MissingMods {
             Remove-Job -Id $completedHandler.Id -Force -ErrorAction SilentlyContinue
             $wc.Dispose()
 
-            if ($script:_dlError) {
-                Write-Log "  GRESKA: $($modEntry.Name) - $($script:_dlError)"
+            if ($dlState.Error) {
+                Write-Log "  GRESKA: $($modEntry.Name) - $($dlState.Error)"
                 continue
             }
 
