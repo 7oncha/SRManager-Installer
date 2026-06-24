@@ -96,7 +96,7 @@ try {
 # ============================================================
 # CONSTANTS
 # ============================================================
-$script:AppVersion = "2.4.0.0"
+$script:AppVersion = "2.4.0.1"
 $script:ConfigPath = Join-Path $PSScriptRoot "sr_config.json"
 $script:IsAdmin = $false
 $script:GitHubRepo = ""

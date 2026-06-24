@@ -1,17 +1,22 @@
-﻿{
-    "version":  "2.3.0.1",
-    "installType":  "zip",
-    "features":  [
-                     "Vise FS25 servera + ping i live status",
-                     "Licenca / HWID / probna 3 dana (bot API)",
-                     "SHA-256 mod manifest i sync (server-authoritative)",
-                     "GitHub auto-update (ZIP + SlavonskaRavnica.ps1)",
-                     "Admin mod, bot config sync, session heartbeat",
-                     "Ispravljen sync: launch gate koristi istu listu kao FALI MODOVI"
-                 ],
-    "downloadUrl":  "https://github.com/7oncha/SRManager-Installer/releases/download/v2.3.0.1/SR_Manager.zip",
-    "instructions":  "Skini ZIP, raspakiraj u folder, pokreni Pokreni SR Manager.bat (NE SRManager.exe). Za dijagnostiku: TEST-POKRENI.bat",
-    "updatedAt":  "2026-05-17T19:55:26.8388556Z",
-    "downloadFile":  "SR_Manager.zip",
-    "releasePageUrl":  "https://github.com/7oncha/SRManager-Installer/releases/tag/v2.3.0.1"
+{
+  "updatedAt": "2026-06-24T09:21:34.9094710Z",
+  "downloadFile": "SR_Manager.zip",
+  "version": "2.4.0.1",
+  "instructions": "Skini ZIP, raspakiraj u folder, pokreni Pokreni SR Manager.bat (NE SRManager.exe)",
+  "features": [
+    "Vise FS25 servera + ping i live status",
+    "Licenca / HWID / probna 3 dana (bot API)",
+    "SHA-256 mod manifest i sync (server-authoritative)",
+    "GitHub auto-update u ispravan install folder (ZIP)",
+    "Admin mod, bot config sync, session heartbeat",
+    "UI 2.3: farmbuddy-style dark + gold, SrCard grid, platform kartice",
+    "Tamni scrollbar, psenica/traktor siluete, DarkCheckBox",
+    "Multiplayer folderi (favoriti, brzi odabir pri joinu)",
+    "Mod favoriti + SHOW filter; save wizard 7 koraka (HR)",
+    "Postavke: Steam/Xbox/Giants, intro skip, fullscreen F11",
+    "Fix-Desktop-Shortcut.bat u ZIP paketu"
+  ],
+  "downloadUrl": "https://github.com/7oncha/SRManager-Installer/releases/download/v2.4.0.1/SR_Manager.zip",
+  "releasePageUrl": "https://github.com/7oncha/SRManager-Installer/releases/tag/v2.4.0.1",
+  "installType": "zip"
 }

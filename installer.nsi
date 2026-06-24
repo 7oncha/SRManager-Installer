@@ -16,7 +16,7 @@ RequestExecutionLevel user
 Unicode True
 
 ; ---- Verzija (azuriraj za svaki release) ----
-!define VERSION "2.4.0.0"
+!define VERSION "2.4.0.1"
 !define PUBLISHER "Slavonska Ravnica"
 !define WEBSITE "https://discord.gg/slavonskaravnica"
 
