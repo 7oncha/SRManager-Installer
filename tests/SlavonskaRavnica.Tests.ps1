@@ -603,8 +603,11 @@ Describe 'Test-LauncherUpdateAvailable' {
         # Postavljamo $script:AppVersion za testove
         $script:AppVersion = '1.0.0'
     }
-    It 'vraca true ako je remote verzija razlicita' {
+    It 'vraca true ako je remote verzija novija' {
         Test-LauncherUpdateAvailable 'v2.0.0' | Should -Be $true
+    }
+    It 'vraca false ako je remote verzija starija' {
+        Test-LauncherUpdateAvailable 'v0.9.0' | Should -Be $false
     }
     It 'vraca false ako je remote isti kao lokalni' {
         Test-LauncherUpdateAvailable 'v1.0.0' | Should -Be $false
