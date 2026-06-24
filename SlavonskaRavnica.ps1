@@ -2644,6 +2644,13 @@ function Test-LauncherUpdateAvailable {
     $remote = Normalize-LauncherVersion $RemoteVersion
     $local = Normalize-LauncherVersion $script:AppVersion
     if (-not $remote) { return $false }
+
+    $remoteVersion = $null
+    $localVersion = $null
+    if ([Version]::TryParse($remote, [ref]$remoteVersion) -and [Version]::TryParse($local, [ref]$localVersion)) {
+        return ($remoteVersion -gt $localVersion)
+    }
+
     return ($remote -ne $local)
 }
 
@@ -2819,8 +2826,7 @@ function Check-ForUpdate {
                 Write-Log "Nova verzija (bot): v$($latest.version) | ZIP: $($script:LatestVersion.url)"
                 return $true
             }
-            Write-Log "Aplikacija je azurna (bot endpoint)."
-            return $false
+            Write-Log "Bot verzija nije novija; provjeravam GitHub fallback."
         }
     } catch {
         Write-Log "Bot update endpoint nedostupan: $($_.Exception.Message)"

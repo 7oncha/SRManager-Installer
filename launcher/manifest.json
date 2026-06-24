@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-24T09:21:34.9094710Z",
-  "downloadFile": "SR_Manager.zip",
+  "downloadUrl": "https://github.com/7oncha/SRManager-Installer/releases/download/v2.4.0.1/SR_Manager.zip",
+  "installType": "zip",
+  "updatedAt": "2026-06-24T09:29:29.7288161Z",
   "version": "2.4.0.1",
-  "instructions": "Skini ZIP, raspakiraj u folder, pokreni Pokreni SR Manager.bat (NE SRManager.exe)",
   "features": [
     "Vise FS25 servera + ping i live status",
     "Licenca / HWID / probna 3 dana (bot API)",
@@ -16,7 +16,7 @@
     "Postavke: Steam/Xbox/Giants, intro skip, fullscreen F11",
     "Fix-Desktop-Shortcut.bat u ZIP paketu"
   ],
-  "downloadUrl": "https://github.com/7oncha/SRManager-Installer/releases/download/v2.4.0.1/SR_Manager.zip",
-  "releasePageUrl": "https://github.com/7oncha/SRManager-Installer/releases/tag/v2.4.0.1",
-  "installType": "zip"
+  "instructions": "Skini ZIP, raspakiraj u folder, pokreni Pokreni SR Manager.bat (NE SRManager.exe)",
+  "downloadFile": "SR_Manager.zip",
+  "releasePageUrl": "https://github.com/7oncha/SRManager-Installer/releases/tag/v2.4.0.1"
 }
