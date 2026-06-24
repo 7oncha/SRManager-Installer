@@ -1,2 +1,5 @@
 SRManager.exe
 *.exe
+
+# Lokalni config s tajnama (korisnik ga kreira lokalno s pravim tokenom)
+sr_local_config.json
