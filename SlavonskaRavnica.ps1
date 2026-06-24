@@ -105,6 +105,8 @@ $script:ModListCached = $false
 $script:ModThumbsPath = Join-Path $env:APPDATA 'SR-Launcher\mod-thumbs'
 $script:ActiveModsPath = ""
 $script:MpFolderComboUpdating = $false
+$script:CachedHwid = $null
+$script:CurrentPage = 'dash'
 
 # License system
 $script:LicenseRepoOwner = "7oncha"
@@ -138,6 +140,7 @@ function Get-SHA256 {
 # LICENSE - HWID
 # ============================================================
 function Get-Hwid {
+    if ($script:CachedHwid) { return $script:CachedHwid }
     try {
         # MachineGuid
         $mg = ""
@@ -152,9 +155,11 @@ function Get-Hwid {
         try { $mb = (Get-WmiObject Win32_BaseBoard -ErrorAction Stop).SerialNumber } catch {}
         $raw = "$mg|$cpu|$mb"
         if ($raw -eq "||") { $raw = $env:COMPUTERNAME + "|" + $env:USERNAME }
-        return Get-SHA256 $raw
+        $script:CachedHwid = Get-SHA256 $raw
+        return $script:CachedHwid
     } catch {
-        return Get-SHA256 ($env:COMPUTERNAME + "|" + $env:USERNAME)
+        $script:CachedHwid = Get-SHA256 ($env:COMPUTERNAME + "|" + $env:USERNAME)
+        return $script:CachedHwid
     }
 }
 
@@ -1682,35 +1687,32 @@ function Start-ModThumbnailLoads {
     foreach ($item in @($Items)) {
         if ($item.HasThumb -or $item.ThumbLoading) { continue }
         if (-not $item.LocalZipPath -or -not (Test-Path $item.LocalZipPath)) { continue }
-        $cached = Get-ModThumbnailCachePath -ZipPath $item.LocalZipPath
-        if ($cached -and (Test-Path $cached)) {
-            $cfi = Get-Item $cached -ErrorAction SilentlyContinue
-            if ($cfi -and $cfi.Length -gt 100) {
-                try {
-                    $item.ThumbSource = New-ModBitmapImage $cached
-                    $item.HasThumb = ($null -ne $item.ThumbSource)
-                } catch {}
-                if ($item.HasThumb) { continue }
-            }
-            # Cache fajl je prazan ili neispravan — obrisi i ponovo generiraj
-            Remove-Item $cached -Force -ErrorAction SilentlyContinue
-        }
         $item.ThumbLoading = $true
         $script:ThumbQueue.Enqueue($item)
     }
     if ($script:ThumbQueue.Count -eq 0) { return }
     $script:ThumbRefreshCounter = 0
-    # DispatcherTimer — obradjuje po 3 thumbnailova svakih 100ms (ne blokira UI)
+    # DispatcherTimer — obradjuje jedan thumbnail po ticku da tabovi ostanu responzivni
     $script:ThumbTimer = New-Object System.Windows.Threading.DispatcherTimer
-    $script:ThumbTimer.Interval = [TimeSpan]::FromMilliseconds(100)
+    $script:ThumbTimer.Interval = [TimeSpan]::FromMilliseconds(120)
     $script:ThumbTimer.Add_Tick({
-        $batch = 3
+        $batch = 1
         $anyUpdated = $false
         while ($batch -gt 0 -and $script:ThumbQueue.Count -gt 0) {
             $batch--
             $it = $script:ThumbQueue.Dequeue()
             try {
-                $path = Get-ModThumbnailFromZip -ZipPath $it.LocalZipPath
+                $path = $null
+                $cached = Get-ModThumbnailCachePath -ZipPath $it.LocalZipPath
+                if ($cached -and (Test-Path $cached)) {
+                    $cfi = Get-Item $cached -ErrorAction SilentlyContinue
+                    if ($cfi -and $cfi.Length -gt 100) {
+                        $path = $cached
+                    } else {
+                        Remove-Item $cached -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                if (-not $path) { $path = Get-ModThumbnailFromZip -ZipPath $it.LocalZipPath }
                 if ($path -and (Test-Path $path)) {
                     $img = New-ModBitmapImage $path
                     if ($img) {
@@ -2098,8 +2100,11 @@ function Invoke-MpFolderActivated {
     if ($txtMpInFolderCount) { $txtMpInFolderCount.Text = "$n modova u odabranom folderu" }
     Update-SidebarLibraryCounts
     if ($Reason) { Write-Log "Aktivni mod folder ($Reason): $eff ($n zipova)" }
-    try { Refresh-ModList } catch {
-        Write-Log "Refresh-ModList nakon MP foldera: $($_.Exception.Message)"
+    $script:ModListCached = $false
+    if ($script:CurrentPage -eq 'mods') {
+        try { Refresh-ModList } catch {
+            Write-Log "Refresh-ModList nakon MP foldera: $($_.Exception.Message)"
+        }
     }
 }
 
@@ -2283,17 +2288,10 @@ function Get-LibrarySidebarCounts {
     $zips = @(Get-ChildItem $path -Filter "*.zip" -ErrorAction SilentlyContinue)
     $counts.Mods = $zips.Count
     foreach ($z in $zips) {
-        try {
-            $meta = Resolve-LocalModMeta -LocalFile $z
-            $mt = if ($meta.ModType) { $meta.ModType } else { 'Other' }
-            switch ($mt) {
-                'Map' { $counts.Maps++ }
-                'Script' { $counts.Scripts++ }
-                default {
-                    if ($z.Name -match 'dlc|DLC') { $counts.DLC++ }
-                }
-            }
-        } catch {}
+        $name = [string]$z.Name
+        if ($name -match '(?i)\bdlc\b|(^|_)dlc|dlc(_|\.zip$)') { $counts.DLC++ }
+        elseif ($name -match '(?i)\bmap\b|(^|_)map|map(_|\.zip$)') { $counts.Maps++ }
+        elseif ($name -match '(?i)script') { $counts.Scripts++ }
     }
     return $counts
 }
@@ -6228,6 +6226,7 @@ $btnClose.Add_Click({ $window.Close() })
 # ============================================================
 function Set-Page {
     param([string]$page)
+    $script:CurrentPage = $page
     $pageDash.Visibility = 'Collapsed'
     $pageMods.Visibility = 'Collapsed'
     $pageIgra.Visibility = 'Collapsed'
@@ -6267,7 +6266,7 @@ function Set-Page {
         } catch {}
     }
 }
-$navDash.Add_Checked({ Set-Page 'dash'; Refresh-ServerStatus -Silent })
+$navDash.Add_Checked({ Set-Page 'dash' })
 $navMods.Add_Checked({
     Set-Page 'mods'
     $window.Dispatcher.BeginInvoke([Action]{
@@ -8954,14 +8953,7 @@ $window.Add_Loaded({
                 Refresh-ServerStatus -Silent
             }
         } catch {}
-        try {
-            if ($script:PreloadedModList) {
-                Refresh-ModList -PreloadedServerMods $script:PreloadedModList
-                $script:PreloadedModList = $null
-            } elseif (-not $script:ModListCached) {
-                Refresh-ModList
-            }
-        } catch {}
+        $script:PreloadedModList = $null
         try {
             $gs = $script:PreloadedGameSettings
             if (-not $gs) { $gs = Read-GameSettings }
@@ -9492,8 +9484,8 @@ if (-not (Ensure-LicenseValid)) {
 Set-SplashStep "Sinkronizacija servera..." 58
 try { $script:PreloadedServerStatus = Get-ServerStatus } catch {}
 
-Set-SplashStep "Provjera modova..." 74
-try { $script:PreloadedModList = Get-ServerModList } catch {}
+Set-SplashStep "Priprema modova..." 74
+$script:PreloadedModList = $null
 
 Set-SplashStep "Ucitavam opcije igre..." 86
 try { $script:PreloadedGameSettings = Read-GameSettings } catch {}
