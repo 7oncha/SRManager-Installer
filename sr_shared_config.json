@@ -2,8 +2,8 @@
   "servers": [
     {
       "name": "Slavonska Ravnica",
-      "ip": "176.57.169.250",
-      "webPort": 8620,
+      "ip": "194.163.156.99",
+      "webPort": 8080,
       "gamePort": 11363,
       "statsCode": "oXuXiWxTnqiShUny",
       "password": "ravnica"

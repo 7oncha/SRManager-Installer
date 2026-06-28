@@ -995,15 +995,17 @@ function New-ModSyncItem {
         [string]$ServerSha = '',
         [string]$Version = '-',
         [string]$ModType = 'Other',
+        [string]$DisplayCategory = '',
         [string]$LocalZipPath = '',
         [string]$DownloadUrl = ''
     )
     if (-not $ModType) { $ModType = 'Other' }
     $ModType = Normalize-ModTypeLabel $ModType
+    if (-not $DisplayCategory) { $DisplayCategory = Get-ModCategoryHrLabel $ModType }
     $initial = if ($DisplayName) { ([string]$DisplayName).Substring(0, 1).ToUpper() } else { '?' }
     $tip = "$DisplayName`nStatus: $Status ($((Get-ModSyncStatusLabel $Status)))"
     if ($StatusDetail) { $tip += " - $StatusDetail" }
-    $tip += "`nKategorija: $ModType`nZIP: $ZipName`nLokalno: $Local  |  Server: $Server  |  Velicina: $Size"
+    $tip += "`nKategorija: $DisplayCategory`nZIP: $ZipName`nLokalno: $Local  |  Server: $Server  |  Velicina: $Size"
     if ($Version -and $Version -ne '-') { $tip += "`nVerzija: $Version" }
     if ($LocalSha -or $ServerSha) {
         if ($LocalSha) { $tip += "`nLokal SHA: $LocalSha" }
@@ -1018,6 +1020,7 @@ function New-ModSyncItem {
         Size          = $Size
         Version       = $Version
         Category      = $ModType
+        DisplayCategory = $DisplayCategory
         ModType       = $ModType
         ModTypeSort   = (Get-ModTypeSortOrder $ModType)
         Initial       = $initial
@@ -1025,6 +1028,7 @@ function New-ModSyncItem {
         ToolTipText   = $tip
         LocalZipPath  = $LocalZipPath
         ThumbSource   = $null
+        ThumbPath     = ''
         HasThumb      = $false
         ThumbLoading  = $false
         FavoriteKey   = ''
@@ -1189,18 +1193,36 @@ function Get-ModItemUniqueCount {
     return $keys.Count
 }
 
+function Get-DashboardNewsItems {
+    $items = New-Object System.Collections.ArrayList
+    [void]$items.Add([PSCustomObject]@{
+        Title   = 'Patch 1.20 za Farming Simulator 25'
+        Summary = 'Zadnji GIANTS patch donosi multiplayer fixeve, vizualne dorade i update vozila.'
+        Badge   = 'UPDATE'
+        Url     = 'https://www.farming-simulator.com/newsArticle.php?news_id=689'
+    })
+    [void]$items.Add([PSCustomObject]@{
+        Title   = 'Official FS25 changelog'
+        Summary = 'Provjeri najnoviju verziju igre prije ulaska na server ili nakon velikog updatea.'
+        Badge   = 'PATCH'
+        Url     = 'https://www.farming-simulator.com/updates.php/changelogs/fs25.php'
+    })
+    [void]$items.Add([PSCustomObject]@{
+        Title   = 'GIANTS novosti i DLC info'
+        Summary = 'Novosti, free content updateovi i najave za Farming Simulator 25.'
+        Badge   = 'NEWS'
+        Url     = 'https://www.farming-simulator.com/news.php'
+    })
+    return @($items.ToArray())
+}
+
 function Update-DashboardMissingPreview {
     param([int]$MissingCount)
     if (-not $lstMissingPreview) { return }
     try {
-        $miss = $script:AllModItems | Where-Object { $_.Status -eq 'FALI' -or $_.Status -eq 'ZASTARIO' } | Select-Object -First 6
         $lstMissingPreview.ItemsSource = $null
-        $lstMissingPreview.ItemsSource = @($miss)
-        if ($txtMissingHint) {
-            if ($MissingCount -gt 6) { $txtMissingHint.Text = "+$($MissingCount - 6) jos" }
-            elseif ($MissingCount -eq 0) { $txtMissingHint.Text = "Sve OK" }
-            else { $txtMissingHint.Text = "" }
-        }
+        $lstMissingPreview.ItemsSource = @(Get-DashboardNewsItems)
+        if ($txtMissingHint) { $txtMissingHint.Text = 'GIANTS / FS25' }
     } catch {}
 }
 
@@ -1330,7 +1352,15 @@ function Get-ModTypeFromModDescXml {
     try {
         [xml]$doc = $XmlText
         $root = $doc.modDesc
-        if (-not $root) { return 'Other' }
+        if (-not $root) {
+            if ($doc.map) { return 'Map' }
+            if ($doc.vehicle -or $doc.vehicles) { return 'Vehicle' }
+            if ($doc.placeable -or $doc.placeables) { return 'Placeable' }
+            if ($doc.animal -or $doc.animals) { return 'Animal' }
+            if ($doc.script -or $doc.scripts) { return 'Script' }
+            if ($doc.handTool -or $doc.handTools) { return 'Tool' }
+            return 'Other'
+        }
         if ($root.map) { return 'Map' }
         if ($root.vehicle -or $root.vehicles) { return 'Vehicle' }
         if ($root.placeable -or $root.placeables) { return 'Placeable' }
@@ -1378,6 +1408,82 @@ function Get-ModIconFilenameFromModDescXml {
     return $null
 }
 
+function Get-ModStoreXmlFilenamesFromModDescXml {
+    param([string]$XmlText)
+    $items = New-Object System.Collections.ArrayList
+    if (-not $XmlText) { return @() }
+    foreach ($m in [regex]::Matches($XmlText, '<storeItem[^>]+xmlFilename\s*=\s*"([^"]+)"', 'IgnoreCase')) {
+        $name = $m.Groups[1].Value.Trim()
+        if ($name) { [void]$items.Add($name) }
+    }
+    return @($items.ToArray())
+}
+
+function Get-FS25StoreCategoryLabel {
+    param([string]$Raw)
+    if (-not $Raw) { return '' }
+    $t = $Raw.Trim()
+    switch -Regex ($t) {
+        '^tractorsS$'           { return 'Small Tractor' }
+        '^tractorsM$'           { return 'Medium Tractor' }
+        '^tractorsL$'           { return 'Large Tractor' }
+        '^trucks$'              { return 'Truck' }
+        '^cars$'                { return 'Car' }
+        '^harvesters$'          { return 'Harvester' }
+        '^forageHarvesters$'    { return 'Forage Harvester' }
+        '^trailers$'            { return 'Trailer' }
+        '^animals$'             { return 'Animal Pen' }
+        '^productionPoints$'    { return 'Production Site' }
+        '^sellingPoints$'       { return 'Selling Point' }
+        '^placeables$'          { return 'Placeable' }
+        '^silos$'               { return 'Silo' }
+        '^containers$'          { return 'Container' }
+        '^decoration$'          { return 'Decoration' }
+        '^frontLoaders$'        { return 'Front Loader Tool' }
+        '^wheelLoaders$'        { return 'Wheel Loader Tool' }
+        '^teleLoaders$'         { return 'Telehandler Tool' }
+        '^skidSteerLoaders$'    { return 'Skid Steer Tool' }
+        '^tools$'               { return 'Tool' }
+        '^misc$|^miscellaneous$'{ return 'Miscellaneous' }
+        default {
+            $label = ($t -replace '([a-z])([A-Z])', '$1 $2') -replace '_', ' '
+            if ($label.Length -gt 1) { return ($label.Substring(0,1).ToUpper() + $label.Substring(1)) }
+            return $label.ToUpper()
+        }
+    }
+}
+
+function Get-ModDisplayCategoryFromXmlText {
+    param([string]$XmlText)
+    if (-not $XmlText) { return '' }
+    foreach ($pat in @(
+        '<category>\s*([^<]+)\s*</category>',
+        'category\s*=\s*"([^"]+)"',
+        '<typeDesc>\s*([^<]+)\s*</typeDesc>'
+    )) {
+        if ($XmlText -match $pat) { return (Get-FS25StoreCategoryLabel $Matches[1].Trim()) }
+    }
+    return ''
+}
+
+function Get-ZipEntryText {
+    param([System.IO.Compression.ZipArchiveEntry]$Entry)
+    if (-not $Entry) { return '' }
+    $sr = New-Object System.IO.StreamReader($Entry.Open())
+    try { return $sr.ReadToEnd() } finally { $sr.Dispose() }
+}
+
+function Get-ZipEntryByName {
+    param([System.IO.Compression.ZipArchive]$Zip, [string]$Name)
+    if (-not $Zip -or -not $Name) { return $null }
+    $needle = $Name.Replace('\', '/').TrimStart('/')
+    foreach ($entry in $Zip.Entries) {
+        $full = $entry.FullName.Replace('\', '/').TrimStart('/')
+        if ($full -ieq $needle -or (Split-Path $full -Leaf) -ieq (Split-Path $needle -Leaf)) { return $entry }
+    }
+    return $null
+}
+
 function Get-ModDescEntryFromZip {
     param([System.IO.Compression.ZipArchive]$Zip)
     $best = $null
@@ -1417,16 +1523,16 @@ function Find-ModIconZipEntry {
     }
     foreach ($name in $candidates) {
         if (-not $name) { continue }
-        $leaf = ($name -replace '\\', '/')
+        $leaf = $name.Replace('\', '/')
         foreach ($e in $Zip.Entries) {
-            $fn = ($e.FullName -replace '\\', '/').TrimStart('/')
+            $fn = $e.FullName.Replace('\', '/').TrimStart('/')
             if ($fn -ieq $leaf) { return $e }
             if ($modDir -and ($fn -ieq "$modDir/$leaf")) { return $e }
             if ($fn -ieq (Split-Path $leaf -Leaf)) { return $e }
         }
     }
     foreach ($e in $Zip.Entries) {
-        $fn = ($e.FullName -replace '\\', '/')
+        $fn = $e.FullName.Replace('\', '/')
         if ($fn -imatch '(^|/)([^/]*icon[^/]*|store[^/]*)\.(png|jpg|jpeg|dds)$') { return $e }
     }
     return $null
@@ -1645,9 +1751,10 @@ function Export-ModIconEntryToPng {
 function Get-ModMetaFromZip {
     param([string]$ZipPath)
     $result = [PSCustomObject]@{
-        ModType  = 'Other'
-        Version  = ''
-        IconFile = ''
+        ModType         = 'Other'
+        DisplayCategory = ''
+        Version         = ''
+        IconFile        = ''
     }
     if (-not $ZipPath -or -not (Test-Path $ZipPath)) { return $result }
     try {
@@ -1656,11 +1763,20 @@ function Get-ModMetaFromZip {
         try {
             $desc = Get-ModDescEntryFromZip -Zip $zip
             if (-not $desc) { return $result }
-            $sr = New-Object System.IO.StreamReader($desc.Open())
-            try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
+            $xml = Get-ZipEntryText $desc
             $result.ModType = Get-ModTypeFromModDescXml -XmlText $xml
+            $result.DisplayCategory = Get-ModDisplayCategoryFromXmlText -XmlText $xml
             if ($xml -match '<version>\s*([^<]+)\s*</version>') { $result.Version = $Matches[1].Trim() }
             elseif ($xml -match 'version\s*=\s*"([^"]+)"') { $result.Version = $Matches[1].Trim() }
+            foreach ($storeXmlName in @(Get-ModStoreXmlFilenamesFromModDescXml -XmlText $xml)) {
+                $storeEntry = Get-ZipEntryByName -Zip $zip -Name $storeXmlName
+                if (-not $storeEntry) { continue }
+                $storeXml = Get-ZipEntryText $storeEntry
+                if (-not $result.DisplayCategory) { $result.DisplayCategory = Get-ModDisplayCategoryFromXmlText -XmlText $storeXml }
+                if ($result.ModType -eq 'Other') { $result.ModType = Get-ModTypeFromModDescXml -XmlText $storeXml }
+                if ($result.DisplayCategory) { break }
+            }
+            if (-not $result.DisplayCategory) { $result.DisplayCategory = Get-ModCategoryHrLabel $result.ModType }
             $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
             $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
             if ($iconEntry) { $result.IconFile = $iconEntry.FullName }
@@ -1683,10 +1799,19 @@ function Get-ModThumbnailFromZip {
             $iconEntry = $null
             $desc = Get-ModDescEntryFromZip -Zip $zip
             if ($desc) {
-                $sr = New-Object System.IO.StreamReader($desc.Open())
-                try { $xml = $sr.ReadToEnd() } finally { $sr.Dispose() }
+                $xml = Get-ZipEntryText $desc
                 $iconName = Get-ModIconFilenameFromModDescXml -XmlText $xml
                 $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $iconName -ModDescPath $desc.FullName
+                if (-not $iconEntry) {
+                    foreach ($storeXmlName in @(Get-ModStoreXmlFilenamesFromModDescXml -XmlText $xml)) {
+                        $storeEntry = Get-ZipEntryByName -Zip $zip -Name $storeXmlName
+                        if (-not $storeEntry) { continue }
+                        $storeXml = Get-ZipEntryText $storeEntry
+                        $storeIcon = Get-ModIconFilenameFromModDescXml -XmlText $storeXml
+                        $iconEntry = Find-ModIconZipEntry -Zip $zip -IconFilename $storeIcon -ModDescPath $storeEntry.FullName
+                        if ($iconEntry) { break }
+                    }
+                }
             }
             # Ako nema modDesc ili ikona nije nadjena, pokusaj direktno naci ikonu u ZIP-u
             if (-not $iconEntry) {
@@ -1761,6 +1886,7 @@ function Start-ModThumbnailLoads {
                     $img = New-ModBitmapImage $path
                     if ($img) {
                         $it.ThumbSource = $img
+                        if ($it.PSObject.Properties['ThumbPath']) { $it.ThumbPath = $path }
                         $it.HasThumb = $true
                         $anyUpdated = $true
                     }
@@ -3026,9 +3152,9 @@ function Load-Config {
         servers      = @(
             [PSCustomObject]@{
                 name      = "Slavonska Ravnica"
-                ip        = "176.57.169.250"
-                webPort   = 8620
-                gamePort  = 8600
+                ip        = "194.163.156.99"
+                webPort   = 8080
+                gamePort  = 11363
                 statsCode = "oXuXiWxTnqiShUny"
                 password  = ""
             },
@@ -4781,14 +4907,14 @@ $script:PreloadedLocalModCount = $null
                             <ItemsControl x:Name="lstRecentSyncMods" Visibility="Collapsed"/>
                             <ItemsControl x:Name="lstActivityFeed" Visibility="Collapsed"/>
 
-                            <!-- Fali modovi panel (full-width) -->
+                            <!-- FS25 update/news panel (full-width) -->
                             <Border Style="{StaticResource SrCard}" MinHeight="180" Margin="0,0,0,16">
                                 <Border.Effect>
                                     <DropShadowEffect Color="Black" BlurRadius="14" ShadowDepth="0" Opacity="0.4"/>
                                 </Border.Effect>
                                 <StackPanel>
                                         <Grid Margin="0,0,0,10">
-                                            <TextBlock Text="FALI MODOVI" FontSize="10" Foreground="#888"
+                                            <TextBlock Text="FS25 UPDATE / VIJESTI" FontSize="10" Foreground="#888"
                                                        FontWeight="Bold" FontFamily="Segoe UI"/>
                                             <TextBlock x:Name="txtMissingHint" Text="" FontSize="10"
                                                        Foreground="#666" FontFamily="Segoe UI"
@@ -4827,30 +4953,20 @@ $script:PreloadedLocalModCount = $null
                                                                 <ColumnDefinition Width="*"/>
                                                                 <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
-                                                            <Border Grid.Column="0" Width="6" Height="6"
-                                                                    CornerRadius="3" Background="#E5484D"
-                                                                    Margin="0,0,10,0" VerticalAlignment="Center">
-                                                                <Border.Effect>
-                                                                    <DropShadowEffect Color="#E5484D" BlurRadius="8" ShadowDepth="0" Opacity="0.9"/>
-                                                                </Border.Effect>
-                                                                <Border.Triggers>
-                                                                    <EventTrigger RoutedEvent="Border.Loaded">
-                                                                        <BeginStoryboard>
-                                                                            <Storyboard RepeatBehavior="Forever">
-                                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                                                 From="1" To="0.4" Duration="0:0:1.2"
-                                                                                                 AutoReverse="True"/>
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </EventTrigger>
-                                                                </Border.Triggers>
-                                                            </Border>
-                                                            <TextBlock Grid.Column="1" Text="{Binding Name}"
-                                                                       FontSize="11" Foreground="#ddd"
-                                                                       FontFamily="Segoe UI" VerticalAlignment="Center"
-                                                                       TextTrimming="CharacterEllipsis"/>
-                                                            <TextBlock Grid.Column="2" Text="{Binding Status}"
-                                                                       FontSize="10" Foreground="#E5484D"
+                                                            <Border Grid.Column="0" Width="6" Height="36"
+                                                                    CornerRadius="3" Background="{StaticResource Gold}"
+                                                                    Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Title}"
+                                                                           FontSize="11" Foreground="#eee" FontWeight="SemiBold"
+                                                                           FontFamily="Segoe UI" TextTrimming="CharacterEllipsis"/>
+                                                                <TextBlock Text="{Binding Summary}"
+                                                                           FontSize="10" Foreground="#777"
+                                                                           FontFamily="Segoe UI" TextTrimming="CharacterEllipsis"
+                                                                           Margin="0,2,0,0"/>
+                                                            </StackPanel>
+                                                            <TextBlock Grid.Column="2" Text="{Binding Badge}"
+                                                                       FontSize="10" Foreground="{StaticResource Gold}"
                                                                        FontWeight="Bold" FontFamily="Segoe UI"
                                                                        VerticalAlignment="Center"/>
                                                         </Grid>
@@ -4858,7 +4974,7 @@ $script:PreloadedLocalModCount = $null
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
-                                        <Button x:Name="btnGoToMods" Content="Otvori sve modove"
+                                        <Button x:Name="btnOpenFsNews" Content="Otvori official FS25 changelog"
                                                 Style="{StaticResource BtnGhost}" HorizontalAlignment="Stretch"
                                                 Margin="0,8,0,0" FontSize="11"/>
                                     </StackPanel>
@@ -5037,11 +5153,10 @@ $script:PreloadedLocalModCount = $null
                                                     <!-- Slika moda — zauzima vecinu kartice -->
                                                     <Border Grid.Row="0" CornerRadius="8,8,0,0" Background="#0d0d0d" ClipToBounds="True">
                                                         <Grid>
-                                                            <Image Stretch="UniformToFill"
+                                                            <Image Source="{Binding ThumbSource}" Stretch="UniformToFill"
                                                                    HorizontalAlignment="Center" VerticalAlignment="Center">
                                                                 <Image.Style>
                                                                     <Style TargetType="Image">
-                                                                        <Setter Property="Source" Value="{Binding ThumbSource}"/>
                                                                         <Setter Property="Visibility" Value="Collapsed"/>
                                                                         <Style.Triggers>
                                                                             <DataTrigger Binding="{Binding HasThumb}" Value="True">
@@ -5134,11 +5249,16 @@ $script:PreloadedLocalModCount = $null
                                                                     ToolTip="Dodaj ili ukloni iz favorita"/>
                                                         </Grid>
                                                     </Border>
-                                                    <!-- Samo ime moda ispod slike -->
-                                                    <Border Grid.Row="1" Padding="8,6,8,6" Background="Transparent">
-                                                        <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
-                                                                   Foreground="{StaticResource BodyText}" TextTrimming="CharacterEllipsis"
-                                                                   MaxWidth="152" FontFamily="Segoe UI"/>
+                                                    <!-- Ime i kategorija moda ispod slike -->
+                                                    <Border Grid.Row="1" Padding="8,5,8,6" Background="Transparent">
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding DisplayCategory}" FontSize="9" FontWeight="Bold"
+                                                                       Foreground="#9d8df5" TextTrimming="CharacterEllipsis"
+                                                                       MaxWidth="152" FontFamily="Segoe UI" Margin="0,0,0,2"/>
+                                                            <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"
+                                                                       Foreground="{StaticResource BodyText}" TextTrimming="CharacterEllipsis"
+                                                                       MaxWidth="152" FontFamily="Segoe UI"/>
+                                                        </StackPanel>
                                                     </Border>
                                                 </Grid>
                                             </Border>
@@ -6106,7 +6226,7 @@ $txtModsVisible      = $window.FindName("txtModsVisible")
 $scrollModsList      = $window.FindName("scrollModsList")
 $lstMissingPreview   = $window.FindName("lstMissingPreview")
 $txtMissingHint      = $window.FindName("txtMissingHint")
-$btnGoToMods         = $window.FindName("btnGoToMods")
+$btnOpenFsNews      = $window.FindName("btnOpenFsNews")
 $lstActivityFeed     = $window.FindName("lstActivityFeed")
 # Theme + behavior controls
 $themeGold           = $window.FindName("themeGold")
@@ -7503,15 +7623,17 @@ function Resolve-LocalModMeta {
         [string]$FallbackVersion = '-'
     )
     $meta = [PSCustomObject]@{
-        ModType       = 'Other'
-        Version       = $FallbackVersion
-        LocalZipPath  = ''
+        ModType         = 'Other'
+        DisplayCategory = ''
+        Version         = $FallbackVersion
+        LocalZipPath    = ''
     }
     if (-not $LocalFile) { return $meta }
     try {
         $meta.LocalZipPath = $LocalFile.FullName
         $zipMeta = Get-ModMetaFromZip -ZipPath $meta.LocalZipPath
         if ($zipMeta.ModType) { $meta.ModType = $zipMeta.ModType }
+        if ($zipMeta.DisplayCategory) { $meta.DisplayCategory = $zipMeta.DisplayCategory }
         if ($zipMeta.Version -and $meta.Version -eq '-') { $meta.Version = $zipMeta.Version }
     } catch {}
     return $meta
@@ -7549,7 +7671,7 @@ function Refresh-ModList {
             $lm = Resolve-LocalModMeta -LocalFile $mod
             [void]$allItems.Add((New-ModSyncItem -Status 'Lokalno' -DisplayName $mod.BaseName -ZipName $mod.Name `
                 -Local 'Da' -Server '?' -Size $size -StatusDetail 'Server lista nedostupna' `
-                -ModType $lm.ModType -LocalZipPath $lm.LocalZipPath -Version $lm.Version))
+                -ModType $lm.ModType -DisplayCategory $lm.DisplayCategory -LocalZipPath $lm.LocalZipPath -Version $lm.Version))
             # Pumpaj WPF dispatcher svaki 20. mod da UI ne zamrzne
             $loopCount++
             if ($loopCount % 20 -eq 0) {
@@ -7641,12 +7763,12 @@ function Refresh-ModList {
                 [void]$allItems.Add((New-ModSyncItem -Status 'ZASTARIO' -DisplayName $displayName -ZipName $zipName `
                     -Local 'Da' -Server $serverLabel -Size $size -StatusDetail $statusDetail `
                     -LocalSha $localSha -ServerSha $smSha -Version $verLabel `
-                    -ModType $localMeta.ModType -LocalZipPath $localMeta.LocalZipPath -DownloadUrl $dlUrl))
+                    -ModType $localMeta.ModType -DisplayCategory $localMeta.DisplayCategory -LocalZipPath $localMeta.LocalZipPath -DownloadUrl $dlUrl))
                 Add-RecentModSyncEntry -Name $displayName -Action 'azuriran'
             } else {
                 [void]$allItems.Add((New-ModSyncItem -Status 'OK' -DisplayName $displayName -ZipName $zipName `
                     -Local 'Da' -Server 'Da' -Size $size -StatusDetail 'Sinkronizirano (SHA/velicina OK)' -Version $verLabel `
-                    -ModType $localMeta.ModType -LocalZipPath $localMeta.LocalZipPath -DownloadUrl $dlUrl))
+                    -ModType $localMeta.ModType -DisplayCategory $localMeta.DisplayCategory -LocalZipPath $localMeta.LocalZipPath -DownloadUrl $dlUrl))
             }
         } else {
             $missing++
@@ -7675,7 +7797,7 @@ function Refresh-ModList {
             $extraMeta = Resolve-LocalModMeta -LocalFile $lm
             [void]$allItems.Add((New-ModSyncItem -Status 'Extra' -DisplayName $lm.BaseName -ZipName $lm.Name `
                 -Local 'Da' -Server 'Ne' -Size $size -StatusDetail 'Nije na server listi' `
-                -ModType $extraMeta.ModType -LocalZipPath $extraMeta.LocalZipPath -Version $extraMeta.Version))
+                -ModType $extraMeta.ModType -DisplayCategory $extraMeta.DisplayCategory -LocalZipPath $extraMeta.LocalZipPath -Version $extraMeta.Version))
         }
     }
     $script:AllModItems = @($allItems.ToArray())
@@ -8040,7 +8162,7 @@ function Join-Server {
 # ============================================================
 $btnJoinServer.Add_Click({ Join-Server })
 $btnSyncMods.Add_Click({ Refresh-ModList })
-if ($btnGoToMods) { $btnGoToMods.Add_Click({ $navMods.IsChecked = $true }) }
+if ($btnOpenFsNews) { $btnOpenFsNews.Add_Click({ Start-Process 'https://www.farming-simulator.com/updates.php/changelogs/fs25.php' }) }
 $btnRefreshMods.Add_Click({ Refresh-ModList })
 if ($btnRescanMods) {
     $btnRescanMods.Add_Click({
