@@ -1177,6 +1177,50 @@ function Get-MissingSyncModItems {
     return @($script:AllModItems | Where-Object { $_.Status -eq 'FALI' -or $_.Status -eq 'ZASTARIO' })
 }
 
+function Get-ModItemUniqueCount {
+    param([scriptblock]$Predicate)
+    $keys = @{}
+    foreach ($item in @($script:AllModItems)) {
+        if (& $Predicate $item) {
+            $key = if ($item.ZipName) { [string]$item.ZipName } elseif ($item.Name) { [string]$item.Name } else { [guid]::NewGuid().ToString() }
+            $keys[$key.ToLower()] = $true
+        }
+    }
+    return $keys.Count
+}
+
+function Update-DashboardMissingPreview {
+    param([int]$MissingCount)
+    if (-not $lstMissingPreview) { return }
+    try {
+        $miss = $script:AllModItems | Where-Object { $_.Status -eq 'FALI' -or $_.Status -eq 'ZASTARIO' } | Select-Object -First 6
+        $lstMissingPreview.ItemsSource = $null
+        $lstMissingPreview.ItemsSource = @($miss)
+        if ($txtMissingHint) {
+            if ($MissingCount -gt 6) { $txtMissingHint.Text = "+$($MissingCount - 6) jos" }
+            elseif ($MissingCount -eq 0) { $txtMissingHint.Text = "Sve OK" }
+            else { $txtMissingHint.Text = "" }
+        }
+    } catch {}
+}
+
+function Update-ModSyncOverview {
+    param($LocalCount = $null, $ServerCount = $null, $MissingCount = $null)
+    if ($null -eq $LocalCount) { $LocalCount = Get-ModItemUniqueCount { param($i) $i.Local -eq 'Da' } }
+    if ($null -eq $ServerCount) { $ServerCount = Get-ModItemUniqueCount { param($i) $i.Server -like 'Da*' } }
+    if ($null -eq $MissingCount) { $MissingCount = @(Get-MissingSyncModItems).Count }
+
+    foreach ($tb in @($txtMyModCount, $txtModsLocal)) { if ($tb) { $tb.Text = "$LocalCount" } }
+    foreach ($tb in @($txtServerModCount, $txtModsServer)) { if ($tb) { $tb.Text = "$ServerCount" } }
+    foreach ($tb in @($txtMissingCount, $txtModsMissing)) { if ($tb) { $tb.Text = "$MissingCount" } }
+
+    $missingPreviewCount = 0
+    [void][int]::TryParse([string]$MissingCount, [ref]$missingPreviewCount)
+    Update-DashboardMissingPreview -MissingCount $missingPreviewCount
+    Update-DashboardSyncPanel
+    Update-ModsPathWarningBanner
+}
+
 function Resolve-ServerModEntry {
     param(
         [array]$ServerMods,
@@ -2645,8 +2689,8 @@ function Test-LauncherUpdateAvailable {
     $local = Normalize-LauncherVersion $script:AppVersion
     if (-not $remote) { return $false }
 
-    $remoteVersion = $null
-    $localVersion = $null
+    $remoteVersion = [Version]'0.0'
+    $localVersion = [Version]'0.0'
     if ([Version]::TryParse($remote, [ref]$remoteVersion) -and [Version]::TryParse($local, [ref]$localVersion)) {
         return ($remoteVersion -gt $localVersion)
     }
@@ -4872,10 +4916,21 @@ $script:PreloadedLocalModCount = $null
                             </Border>
                         </UniformGrid>
 
-                        <!-- Toolbar (akcije + search + filteri u jednom blocku) -->
-                        <Border Grid.Row="2" Background="#121212" CornerRadius="8"
-                                Padding="16,14" Margin="0,0,0,12"
-                                BorderBrush="{StaticResource CardBorder}" BorderThickness="1">
+                        <!-- Toolbar (akcije + moderni filteri u jednom dashboard-style bloku) -->
+                        <Border Grid.Row="2" CornerRadius="14" Padding="16" Margin="0,0,0,12" BorderThickness="1">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#17130a" Offset="0"/>
+                                    <GradientStop Color="#121212" Offset="0.55"/>
+                                    <GradientStop Color="#0f0f0f" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Border.BorderBrush>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="#3a2e10" Offset="0"/>
+                                    <GradientStop Color="#222" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.BorderBrush>
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
@@ -4883,30 +4938,16 @@ $script:PreloadedLocalModCount = $null
                                 </Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="320"/>
                                 </Grid.ColumnDefinitions>
 
-                                <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal">
-                                    <Button x:Name="btnRefreshMods" Content="Osvjezi"
-                                            Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
-                                            ToolTip="Provjeri server modove i usporedi sa lokalnim"/>
-                                    <Button x:Name="btnRescanMods" Content="Ponovno skeniraj"
-                                            Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
-                                            ToolTip="Prisilno osvjezi manifest sa servera (bot ili mods.html)"/>
-                                    <Button x:Name="btnDownloadMissing" Content="Skini Sve Sto Fali"
-                                            Style="{StaticResource BtnPrimary}" Margin="0,0,8,0"
-                                            ToolTip="Skini sve mod-ove sa statusom FALI ili ZASTARIO"/>
-                                    <Border Width="1" Background="#2a2a2a" Margin="4,2,12,2"/>
-                                    <Button x:Name="btnDeleteMod" Content="Obrisi"
-                                            Style="{StaticResource BtnDanger}" Margin="0,0,8,0"
-                                            ToolTip="Obrisi oznaceni lokalni mod (Recycle Bin)"/>
-                                    <Button x:Name="btnOpenModsFolder" Content="Otvori Folder"
-                                            Style="{StaticResource BtnGhost}"
-                                            ToolTip="Otvori mods folder u Windows Exploreru"/>
+                                <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,18,0">
+                                    <TextBlock Text="Modovi" FontSize="16" FontWeight="Bold" Foreground="White" FontFamily="Segoe UI"/>
+                                    <TextBlock Text="Filtriraj status, tip moda ili brzo pronadji po imenu" Style="{StaticResource PageSubtitle}"/>
                                 </StackPanel>
-                                <Grid Grid.Row="0" Grid.Column="1" Width="280" VerticalAlignment="Center">
+                                <Grid Grid.Row="0" Grid.Column="1" VerticalAlignment="Center">
                                     <TextBox x:Name="txtModSearch" Style="{StaticResource DarkInput}"
-                                             FontSize="12" VerticalContentAlignment="Center"/>
+                                             FontSize="12" VerticalContentAlignment="Center" Padding="14,9"/>
                                     <TextBlock Text="Pretrazi modove..." FontSize="12"
                                                Foreground="#666" FontFamily="Segoe UI"
                                                VerticalAlignment="Center" Margin="14,0,0,0"
@@ -4914,34 +4955,50 @@ $script:PreloadedLocalModCount = $null
                                                x:Name="txtModSearchPlaceholder"/>
                                 </Grid>
 
-                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,12,0,0">
-                                    <StackPanel Orientation="Horizontal">
-                                        <RadioButton x:Name="filterAll" Content="Svi" GroupName="modFilter"
-                                                     Style="{StaticResource BtnFilter}" IsChecked="True" Margin="0,0,6,0"/>
-                                        <RadioButton x:Name="filterServer" Content="Server" GroupName="modFilter"
-                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                        <RadioButton x:Name="filterMissing" Content="Fali" GroupName="modFilter"
-                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                        <RadioButton x:Name="filterExtra" Content="Extra" GroupName="modFilter"
-                                                     Style="{StaticResource BtnFilter}" Margin="0,0,6,0"/>
-                                        <RadioButton x:Name="filterLocal" Content="Lokalno" GroupName="modFilter"
-                                                     Style="{StaticResource BtnFilter}"/>
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                        <TextBlock Text="PRIKAZ:" FontSize="10" Foreground="#666" FontWeight="Bold"
-                                                   VerticalAlignment="Center" Margin="0,0,10,0" FontFamily="Segoe UI"/>
-                                        <ComboBox x:Name="cmbModShow" Width="240" MinWidth="200"
-                                                  Style="{StaticResource DarkComboBox}"
-                                                  DisplayMemberPath="Label"/>
-                                    </StackPanel>
-                                </StackPanel>
+                                <WrapPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,14,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="STATUS" FontSize="10" Foreground="#777" FontWeight="Bold"
+                                               VerticalAlignment="Center" Margin="0,0,10,0" FontFamily="Segoe UI"/>
+                                    <RadioButton x:Name="filterAll" Content="Svi" GroupName="modFilter"
+                                                 Style="{StaticResource BtnFilter}" IsChecked="True" Margin="0,0,6,6"/>
+                                    <RadioButton x:Name="filterMissing" Content="Fali / zastarjelo" GroupName="modFilter"
+                                                 Style="{StaticResource BtnFilter}" Margin="0,0,6,6"/>
+                                    <RadioButton x:Name="filterServer" Content="Na serveru" GroupName="modFilter"
+                                                 Style="{StaticResource BtnFilter}" Margin="0,0,6,6"/>
+                                    <RadioButton x:Name="filterLocal" Content="Lokalno" GroupName="modFilter"
+                                                 Style="{StaticResource BtnFilter}" Margin="0,0,6,6"/>
+                                    <RadioButton x:Name="filterExtra" Content="Visak" GroupName="modFilter"
+                                                 Style="{StaticResource BtnFilter}" Margin="0,0,14,6"/>
+
+                                    <TextBlock Text="TIP" FontSize="10" Foreground="#777" FontWeight="Bold"
+                                               VerticalAlignment="Center" Margin="0,0,10,6" FontFamily="Segoe UI"/>
+                                    <ComboBox x:Name="cmbModShow" Width="230" MinWidth="200" Margin="0,0,14,6"
+                                              Style="{StaticResource DarkComboBox}"
+                                              DisplayMemberPath="Label"/>
+
+                                    <Button x:Name="btnDownloadMissing" Content="Skini sto fali"
+                                            Style="{StaticResource BtnPrimary}" Margin="0,0,8,6"
+                                            ToolTip="Skini sve modove sa statusom FALI ili ZASTARIO"/>
+                                    <Button x:Name="btnRefreshMods" Content="Osvjezi"
+                                            Style="{StaticResource BtnGhost}" Margin="0,0,8,6"
+                                            ToolTip="Provjeri server modove i usporedi s lokalnim"/>
+                                    <Button x:Name="btnOpenModsFolder" Content="Folder"
+                                            Style="{StaticResource BtnGhost}" Margin="0,0,8,6"
+                                            ToolTip="Otvori mods folder u Windows Exploreru"/>
+                                    <Button x:Name="btnRescanMods" Content="Ponovno skeniraj"
+                                            Style="{StaticResource BtnGhost}" Visibility="Collapsed"/>
+                                    <Button x:Name="btnDeleteMod" Content="Obrisi"
+                                            Style="{StaticResource BtnDanger}" Visibility="Collapsed"/>
+                                </WrapPanel>
                             </Grid>
                         </Border>
 
                         <Border Grid.Row="3" Background="#0e0e0e" CornerRadius="8"
                                 BorderBrush="{StaticResource CardBorder}" BorderThickness="1" Padding="12">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled">
+                            <ScrollViewer x:Name="scrollModsList"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          CanContentScroll="False"
+                                          PanningMode="VerticalOnly">
                                 <ListBox x:Name="lstMods" Background="Transparent" Foreground="#ddd"
                                          BorderThickness="0" FontFamily="Segoe UI"
                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -6046,6 +6103,7 @@ $txtModsLocal        = $window.FindName("txtModsLocal")
 $txtModsServer       = $window.FindName("txtModsServer")
 $txtModsMissing      = $window.FindName("txtModsMissing")
 $txtModsVisible      = $window.FindName("txtModsVisible")
+$scrollModsList      = $window.FindName("scrollModsList")
 $lstMissingPreview   = $window.FindName("lstMissingPreview")
 $txtMissingHint      = $window.FindName("txtMissingHint")
 $btnGoToMods         = $window.FindName("btnGoToMods")
@@ -6272,7 +6330,7 @@ function Set-Page {
         } catch {}
     }
 }
-$navDash.Add_Checked({ Set-Page 'dash' })
+$navDash.Add_Checked({ Set-Page 'dash'; if ($script:ModListCached) { Update-ModSyncOverview } })
 $navMods.Add_Checked({
     Set-Page 'mods'
     $window.Dispatcher.BeginInvoke([Action]{
@@ -7293,10 +7351,10 @@ function Update-ModsDirectoryOverride {
 $script:AllModItems = @()
 
 function Get-CurrentFilter {
-    if ($filterServer.IsChecked)  { return "Server" }
-    if ($filterMissing.IsChecked) { return "Missing" }
-    if ($filterExtra.IsChecked)   { return "Extra" }
-    if ($filterLocal.IsChecked)   { return "Local" }
+    if ($filterServer -and $filterServer.IsChecked)  { return "Server" }
+    if ($filterMissing -and $filterMissing.IsChecked) { return "Missing" }
+    if ($filterExtra -and $filterExtra.IsChecked)   { return "Extra" }
+    if ($filterLocal -and $filterLocal.IsChecked)   { return "Local" }
     return "All"
 }
 
@@ -7306,11 +7364,9 @@ function Get-CurrentModCategoryFilter {
 }
 
 function Apply-ModFilter {
-    param([string]$filter = "All", [string]$CategoryFilter = 'All')
-    if ($filter -eq 'All' -and $CategoryFilter -eq 'All') {
-        $filter = Get-CurrentFilter
-        $CategoryFilter = Get-CurrentModCategoryFilter
-    }
+    param([string]$filter = $null, [string]$CategoryFilter = $null)
+    if (-not $filter) { $filter = Get-CurrentFilter }
+    if (-not $CategoryFilter) { $CategoryFilter = Get-CurrentModCategoryFilter }
     Sync-ModFavoriteFlags
     $searchText = if ($txtModSearch -and $txtModSearch.Text) { $txtModSearch.Text.Trim().ToLower() } else { "" }
     $filtered = New-Object System.Collections.ArrayList
@@ -7330,7 +7386,8 @@ function Apply-ModFilter {
             $show = ($mt -eq $CategoryFilter)
         }
         if ($show -and $searchText) {
-            $show = $item.Name.ToLower().Contains($searchText) -or $item.Category.ToLower().Contains($searchText)
+            $haystack = @($item.Name, $item.ZipName, $item.Category, $item.Status, $item.ModType) -join ' '
+            $show = $haystack.ToLower().Contains($searchText)
         }
         if ($show) { [void]$filtered.Add($item) }
     }
@@ -7339,6 +7396,7 @@ function Apply-ModFilter {
     if ($txtModsVisible) { $txtModsVisible.Text = "$($sorted.Count)" }
     if ($txtModSubtitle) {
         $sub = "Prikazano $($sorted.Count) modova"
+        if ($filter -ne 'All') { $sub += " | $filter" }
         if ($CategoryFilter -ne 'All') { $sub += " | $(Get-ModCategoryHrLabel $CategoryFilter)" }
         if ($searchText) { $sub += " | pretraga: '$searchText'" }
         $txtModSubtitle.Text = $sub
@@ -7502,16 +7560,14 @@ function Refresh-ModList {
             }
         }
         $script:AllModItems = @($allItems.ToArray())
+        Update-ModSyncOverview -LocalCount $myCount -ServerCount '?' -MissingCount '?'
         Apply-ModFilter (Get-CurrentFilter)
         return
     }
 
     if ($serverMods.Count -eq 0) {
-        $txtServerModCount.Text = "0"
-        $txtMissingCount.Text = "0"
         $txtModStatus.Text = "Nema modova na serveru ili Public Mod Download nije aktivan."
-        Write-Log "Server nema aktivnih modova."
-        return
+        Write-Log "Server nema aktivnih modova. Prikazujem lokalne modove kao visak."
     }
 
     $localModIndex = Build-LocalModIndex $localMods
@@ -7624,11 +7680,6 @@ function Refresh-ModList {
     }
     $script:AllModItems = @($allItems.ToArray())
 
-    $txtServerModCount.Text = "$($serverMods.Count)"
-    $txtMissingCount.Text = "$missing"
-    if ($txtModsLocal)   { $txtModsLocal.Text   = "$myCount" }
-    if ($txtModsServer)  { $txtModsServer.Text  = "$($serverMods.Count)" }
-    if ($txtModsMissing) { $txtModsMissing.Text = "$missing" }
     # Total velicina lokalnih modova
     if ($txtModSizeTotal) {
         try {
@@ -7639,8 +7690,7 @@ function Refresh-ModList {
     }
     $script:Config.lastSync = Get-Date -Format "dd.MM.yyyy HH:mm"
     Save-Config
-    Update-DashboardSyncPanel
-    Update-ModsPathWarningBanner
+    Update-ModSyncOverview -LocalCount $myCount -ServerCount $serverMods.Count -MissingCount $missing
     $srcLabel = if ($script:ModListSource -eq 'bot-sha256') { 'SHA-256 manifest' } else { 'mods.html' }
     $txtModStatus.Text = "Lokalno: $myCount | Server: $($serverMods.Count) | Fali/Zastarjelo: $missing | Izvor: $srcLabel"
     if ($txtModSubtitle) {
@@ -7651,19 +7701,6 @@ function Refresh-ModList {
         }
     }
     Write-Log "Pregled zavrsen. Lokalno=$myCount  Server=$($serverMods.Count)  Fali=$missing  (od toga zastarjelih: $outdated)  Izvor=$srcLabel"
-    # Dashboard preview "Fali modovi"
-    if ($lstMissingPreview) {
-        try {
-            $miss = $script:AllModItems | Where-Object { $_.Status -eq 'FALI' -or $_.Status -eq 'ZASTARIO' } | Select-Object -First 6
-            $lstMissingPreview.ItemsSource = $null
-            $lstMissingPreview.ItemsSource = @($miss)
-            if ($txtMissingHint) {
-                if ($missing -gt 6) { $txtMissingHint.Text = "+$($missing - 6) jos" }
-                elseif ($missing -eq 0) { $txtMissingHint.Text = "Sve OK" }
-                else { $txtMissingHint.Text = "" }
-            }
-        } catch {}
-    }
     $script:ModListCached = $true
     Update-ModShowCombo
     Apply-ModFilter (Get-CurrentFilter)
@@ -8249,11 +8286,11 @@ if ($txtLogSearch) {
 }
 
 # Filter event handlers
-$filterAll.Add_Checked({ Apply-ModFilter "All" })
-$filterServer.Add_Checked({ Apply-ModFilter "Server" })
-$filterMissing.Add_Checked({ Apply-ModFilter "Missing" })
-$filterExtra.Add_Checked({ Apply-ModFilter "Extra" })
-$filterLocal.Add_Checked({ Apply-ModFilter "Local" })
+if ($filterAll) { $filterAll.Add_Checked({ Apply-ModFilter "All" }) }
+if ($filterServer) { $filterServer.Add_Checked({ Apply-ModFilter "Server" }) }
+if ($filterMissing) { $filterMissing.Add_Checked({ Apply-ModFilter "Missing" }) }
+if ($filterExtra) { $filterExtra.Add_Checked({ Apply-ModFilter "Extra" }) }
+if ($filterLocal) { $filterLocal.Add_Checked({ Apply-ModFilter "Local" }) }
 if ($cmbModShow) {
     $cmbModShow.Add_SelectionChanged({
         if ($script:ModShowComboUpdating) { return }
@@ -8289,6 +8326,15 @@ if ($lstMods) {
         } catch {}
         $e.Handled = $true
     }, $true)
+    if ($scrollModsList) {
+        $lstMods.Add_PreviewMouseWheel({
+            param($sender, $e)
+            try {
+                $scrollModsList.ScrollToVerticalOffset($scrollModsList.VerticalOffset - $e.Delta)
+                $e.Handled = $true
+            } catch {}
+        })
+    }
 }
 
 # Game Options event handlers - auto-save on toggle click
