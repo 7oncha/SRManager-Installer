@@ -59,7 +59,7 @@ This repo is part of a multi-repo ecosystem:
 
 ### External services
 
-The app depends on external services (game server XML API, license API on Railway, GitHub raw content for auto-update). These are live production services — the game server at `176.57.169.250:8620` and license API at `server-bot-production-a3a0.up.railway.app` are reachable from the VM.
+The app depends on external services (game server XML API, license API on Railway, GitHub raw content for auto-update). These are live production services — the game server at `194.163.156.99:8080` and license API at `server-bot-production-a3a0.up.railway.app` are reachable from the VM.
 
 ### Mod sync flow (launcher ↔ bot)
 
